@@ -156,7 +156,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn get_balance(&self, address: String, block: Option<String>) -> RpcResult<String> {
         let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -171,7 +171,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn get_transaction_count(&self, address: String, block: Option<String>) -> RpcResult<String> {
         let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -187,7 +187,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
         let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         let slot = utils::parse_hash(&slot).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -202,7 +202,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn get_code(&self, address: String, block: Option<String>) -> RpcResult<String> {
         let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -221,7 +221,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
         // This is a simplified version - in a real implementation,
         // we would use proper RLP decoding and transaction parsing
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -233,7 +233,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn send_transaction(&self, transaction: TransactionRequest) -> RpcResult<String> {
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -248,7 +248,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn call(&self, transaction: TransactionRequest, block: Option<String>) -> RpcResult<String> {
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -263,7 +263,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn estimate_gas(&self, transaction: TransactionRequest, block: Option<String>) -> RpcResult<String> {
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -280,7 +280,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn get_transaction_by_hash(&self, hash: String) -> RpcResult<Option<EthereumTransaction>> {
         let tx_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -297,7 +297,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn get_transaction_receipt(&self, hash: String) -> RpcResult<Option<TransactionReceipt>> {
         let tx_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -314,7 +314,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn get_block_by_hash(&self, hash: String, full_transactions: bool) -> RpcResult<Option<Block<serde_json::Value>>> {
         let block_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
         
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -329,7 +329,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn get_block_by_number(&self, block: String, full_transactions: bool) -> RpcResult<Option<Block<serde_json::Value>>> {
-        let mut client = match self.pool.get().await {
+        let client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
