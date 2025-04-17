@@ -57,7 +57,12 @@ createdb postgres_evm
 psql -d postgres_evm -f migrations/V1__initial_schema.sql
 ```
 
-3. Configure the application by editing `config.toml`
+3. Copy `config.toml.example' to 'config.toml' and configure the application
+
+```bash
+cp config.toml.example config.toml
+```
+And edit to taste.
 
 ### Running
 
