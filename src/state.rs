@@ -1,7 +1,10 @@
 use deadpool_postgres::Client;
 use primitive_types::{H160, H256, U256};
-use revm::primitives::{Account as revmAccount, Bytecode, HashMap, KECCAK_EMPTY};
+use revm::primitives::{
+    AccountInfo, Bytecode, HashMap, U256 as revmU256, B256,
+};
 use std::str::FromStr;
+use revm::primitives::Bytes as revmBytes;
 
 use crate::errors::{AppError, Result};
 use crate::models::Account;
@@ -59,7 +62,7 @@ impl<'a> PostgresState<'a> {
     }
 
     pub async fn get_code(&self, code_hash: &H256) -> Result<Bytecode> {
-        if code_hash == &KECCAK_EMPTY {
+        if code_hash == &H256::zero() {
             return Ok(Bytecode::default());
         }
 
@@ -72,7 +75,7 @@ impl<'a> PostgresState<'a> {
         
         if let Some(row) = row {
             let value: Vec<u8> = row.get(0);
-            Ok(Bytecode::new_raw(value.into()))
+            Ok(Bytecode::new_raw(revmBytes::from(value)))
         } else {
             Err(AppError::StateError(format!("Code not found for hash: {:?}", code_hash)))
         }
@@ -161,7 +164,7 @@ impl<'a> PostgresState<'a> {
 
 pub struct PostgresStateStorage<'a> {
     client: &'a Client,
-    accounts_cache: HashMap<H160, revmAccount>,
+    accounts_cache: HashMap<H160, AccountInfo>,
     storage_cache: HashMap<(H160, H256), H256>,
     bytecode_cache: HashMap<H256, Bytecode>,
 }
@@ -176,12 +179,12 @@ impl<'a> PostgresStateStorage<'a> {
         }
     }
 
-    pub async fn convert_to_revm_account(&self, account: &Account) -> Result<revmAccount> {
+    pub async fn convert_to_account_info(&self, account: &Account) -> Result<AccountInfo> {
         let code = if let Some(code_hash) = account.code_hash {
-            if code_hash == KECCAK_EMPTY {
+            if code_hash == H256::zero() {
                 Bytecode::default()
             } else if let Some(code) = &account.code {
-                Bytecode::new_raw(code.clone().into())
+                Bytecode::new_raw(revmBytes::from(code.clone()))
             } else {
                 let postgres_state = PostgresState::new(self.client);
                 postgres_state.get_code(&code_hash).await?
@@ -190,14 +193,24 @@ impl<'a> PostgresStateStorage<'a> {
             Bytecode::default()
         };
 
-        Ok(revmAccount {
+        let code_hash = if let Some(hash) = account.code_hash {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(hash.as_bytes());
+            B256::from(bytes)
+        } else {
+            B256::ZERO
+        };
+
+        Ok(AccountInfo {
+            balance: revmU256::from(account.balance.as_u64()),
             nonce: account.nonce.as_u64(),
-            balance: account.balance,
+            code_hash,
             code: Some(code),
+            // status field removed as it's no longer in the AccountInfo struct
         })
     }
 
-    pub async fn load_account(&mut self, address: H160) -> Result<revmAccount> {
+    pub async fn load_account(&mut self, address: H160) -> Result<AccountInfo> {
         if let Some(account) = self.accounts_cache.get(&address) {
             return Ok(account.clone());
         }
@@ -206,15 +219,17 @@ impl<'a> PostgresStateStorage<'a> {
         let account_opt = postgres_state.get_account(&address).await?;
         
         if let Some(account) = account_opt {
-            let revm_account = self.convert_to_revm_account(&account).await?;
-            self.accounts_cache.insert(address, revm_account.clone());
-            Ok(revm_account)
+            let account_info = self.convert_to_account_info(&account).await?;
+            self.accounts_cache.insert(address, account_info.clone());
+            Ok(account_info)
         } else {
             // Return empty account if not found
-            let empty_account = revmAccount {
+            let empty_account = AccountInfo {
+                balance: revmU256::ZERO,
                 nonce: 0,
-                balance: U256::zero(),
+                code_hash: B256::ZERO,
                 code: Some(Bytecode::default()),
+                // status field removed as it's no longer in the AccountInfo struct
             };
             self.accounts_cache.insert(address, empty_account.clone());
             Ok(empty_account)

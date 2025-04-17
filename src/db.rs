@@ -1,11 +1,21 @@
-use deadpool_postgres::{Config, Pool, PoolConfig, Runtime};
-use tokio_postgres::NoTls;
+use deadpool_postgres::{Pool, PoolConfig, Runtime, Manager};
+use tokio_postgres::Config as PgConfig;
 
 use crate::config::DatabaseConfig;
-use crate::errors::Result;
+use crate::errors::{AppError, Result};
+
+// Extend AppError to handle deadpool build errors
+impl From<deadpool::managed::BuildError<tokio_postgres::Error>> for AppError {
+    fn from(error: deadpool::managed::BuildError<tokio_postgres::Error>) -> Self {
+        match error {
+            deadpool::managed::BuildError::Backend(e) => AppError::DatabaseError(e),
+            e => AppError::TransactionError(format!("Failed to build database pool: {:?}", e))
+        }
+    }
+}
 
 pub fn create_pool(config: &DatabaseConfig) -> Result<Pool> {
-    let mut pg_config = tokio_postgres::Config::new();
+    let mut pg_config = PgConfig::new();
     pg_config.host(&config.host);
     pg_config.port(config.port);
     pg_config.user(&config.username);
@@ -14,11 +24,13 @@ pub fn create_pool(config: &DatabaseConfig) -> Result<Pool> {
     pg_config.application_name("postgres-evm");
 
     let pool_config = PoolConfig {
-        max_size: config.max_connections,
+        max_size: config.max_connections as usize,
         ..Default::default()
     };
 
-    let pool = Pool::builder(pg_config)
+    let manager = Manager::new(pg_config, tokio_postgres::NoTls);
+    
+    let pool = Pool::builder(manager)
         .config(pool_config)
         .runtime(Runtime::Tokio1)
         .build()?;
@@ -34,11 +46,8 @@ pub async fn init_db(pool: &Pool) -> Result<()> {
     let value: i32 = result.get(0);
     
     if value != 1 {
-        return Err(crate::errors::AppError::DatabaseError(
-            tokio_postgres::Error::from(std::io::Error::new(
-                std::io::ErrorKind::Other, 
-                "Failed to connect to database"
-            ))
+        return Err(AppError::TransactionError(
+            "Failed to connect to database".to_string()
         ));
     }
     

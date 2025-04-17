@@ -1,5 +1,5 @@
-use ethers_core::types::{Block, Transaction, TransactionReceipt, H256, U256};
-use primitive_types::{H160, H512};
+use ethers_core::types::{Transaction, H256 as EthH256, U256 as EthU256, U64 as EthU64};
+use primitive_types::{H160, H256, H512, U256};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
@@ -81,30 +81,71 @@ pub struct EthereumTransaction {
 
 impl From<Transaction> for EthereumTransaction {
     fn from(tx: Transaction) -> Self {
+        let to_h160 = |opt_h160: Option<ethers_core::types::H160>| {
+            opt_h160.map(|h| {
+                let mut bytes = [0u8; 20];
+                bytes.copy_from_slice(h.as_bytes());
+                H160::from(bytes)
+            })
+        };
+
+        let to_h256 = |opt_h256: Option<EthH256>| {
+            opt_h256.map(|h| {
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(h.as_bytes());
+                H256::from(bytes)
+            })
+        };
+
+        let eth_to_prim_u256 = |eth_u256: EthU256| {
+            let mut bytes = [0u8; 32];
+            eth_u256.to_big_endian(&mut bytes);
+            U256::from_big_endian(&bytes)
+        };
+
+        let eth_u64_to_prim_u256 = |eth_u64: EthU64| {
+            U256::from(eth_u64.as_u64())
+        };
+        
+        // Helper for Option<EthU64> to Option<U256>
+        let opt_eth_u64_to_prim_u256 = |opt_eth_u64: Option<EthU64>| {
+            opt_eth_u64.map(|v| U256::from(v.as_u64()))
+        };
+
         Self {
-            hash: tx.hash,
-            nonce: tx.nonce,
-            block_hash: tx.block_hash,
-            block_number: tx.block_number,
-            transaction_index: tx.transaction_index,
-            from: tx.from,
-            to: tx.to,
-            value: tx.value,
-            gas_price: tx.gas_price,
-            max_fee_per_gas: tx.max_fee_per_gas,
-            max_priority_fee_per_gas: tx.max_priority_fee_per_gas,
-            gas: tx.gas,
+            hash: H256::from_slice(tx.hash.as_bytes()),
+            nonce: eth_to_prim_u256(tx.nonce),
+            block_hash: to_h256(tx.block_hash),
+            block_number: tx.block_number.map(|bn| {
+                let eth_u256 = EthU256::from(bn.as_u64());
+                eth_to_prim_u256(eth_u256)
+            }),
+            transaction_index: tx.transaction_index.map(eth_u64_to_prim_u256),
+            from: H160::from_slice(tx.from.as_bytes()),
+            to: to_h160(tx.to),
+            value: eth_to_prim_u256(tx.value),
+            gas_price: tx.gas_price.map(eth_to_prim_u256),
+            max_fee_per_gas: tx.max_fee_per_gas.map(eth_to_prim_u256),
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas.map(eth_to_prim_u256),
+            gas: eth_to_prim_u256(tx.gas),
             input: tx.input.to_vec(),
-            v: tx.v,
-            r: tx.r,
-            s: tx.s,
-            chain_id: tx.chain_id,
+            v: eth_u64_to_prim_u256(tx.v),
+            r: eth_to_prim_u256(tx.r),
+            s: eth_to_prim_u256(tx.s),
+            chain_id: tx.chain_id.map(|id| id.as_u64()),
             access_list: tx.access_list.map(|al| {
                 al.0.into_iter()
-                    .map(|item| (item.address, item.storage_keys))
+                    .map(|item| {
+                        let addr = H160::from_slice(item.address.as_bytes());
+                        let storage_keys = item.storage_keys
+                            .iter()
+                            .map(|key| H256::from_slice(key.as_bytes()))
+                            .collect();
+                        (addr, storage_keys)
+                    })
                     .collect()
             }),
-            transaction_type: tx.transaction_type,
+            transaction_type: tx.transaction_type.map(eth_u64_to_prim_u256),
         }
     }
 }
