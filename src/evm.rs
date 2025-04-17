@@ -79,7 +79,7 @@ impl EVMExecutor {
         })
     }
     
-    pub async fn get_chain_info_tx(&self, client: &PgTransaction<'_>) -> Result<ChainInfo> {
+    pub async fn get_chain_info_tx(&self, _client: &PgTransaction<'_>) -> Result<ChainInfo> {
         // Since we can't use PostgresState directly with a transaction, 
         // just return the genesis block for simplicity
         Ok(ChainInfo {

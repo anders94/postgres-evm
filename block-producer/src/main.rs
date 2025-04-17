@@ -1,16 +1,16 @@
 use clap::Parser;
 use deadpool_postgres::Pool;
-use ethers_core::types::{H256, U256};
+// No Ethereum types needed
 use postgres_evm::{
     config::Config,
     db::{create_pool, init_db},
     errors::{AppError, Result},
-    models::{BlockEntry, BlockInfo, EthereumReceipt, TransactionEntry},
+    models::{BlockEntry, EthereumReceipt},
 };
-use std::{path::PathBuf, str::FromStr, time::Duration};
+use std::{path::PathBuf, time::Duration};
 use tokio::{
     signal,
-    time::{self, Instant},
+    time::self,
 };
 use tracing::{error, info};
 
@@ -29,7 +29,8 @@ struct Args {
 struct BlockProducer {
     pool: Pool,
     interval: Duration,
-    chain_id: u64,
+    // Renamed to _chain_id to mark as unused
+    _chain_id: u64,
 }
 
 impl BlockProducer {
@@ -37,7 +38,7 @@ impl BlockProducer {
         Self {
             pool,
             interval,
-            chain_id,
+            _chain_id: chain_id,
         }
     }
 

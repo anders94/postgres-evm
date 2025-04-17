@@ -166,7 +166,7 @@ pub struct PostgresStateStorage<'a> {
     client: &'a Client,
     accounts_cache: HashMap<H160, AccountInfo>,
     storage_cache: HashMap<(H160, H256), H256>,
-    bytecode_cache: HashMap<H256, Bytecode>,
+    _bytecode_cache: HashMap<H256, Bytecode>,
 }
 
 impl<'a> PostgresStateStorage<'a> {
@@ -175,7 +175,7 @@ impl<'a> PostgresStateStorage<'a> {
             client,
             accounts_cache: HashMap::new(),
             storage_cache: HashMap::new(),
-            bytecode_cache: HashMap::new(),
+            _bytecode_cache: HashMap::new(),
         }
     }
 

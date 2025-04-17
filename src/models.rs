@@ -108,7 +108,7 @@ impl From<Transaction> for EthereumTransaction {
         };
         
         // Helper for Option<EthU64> to Option<U256>
-        let opt_eth_u64_to_prim_u256 = |opt_eth_u64: Option<EthU64>| {
+        let _opt_eth_u64_to_prim_u256 = |opt_eth_u64: Option<EthU64>| {
             opt_eth_u64.map(|v| U256::from(v.as_u64()))
         };
 

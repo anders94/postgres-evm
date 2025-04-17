@@ -153,10 +153,10 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok(vec![])
     }
 
-    async fn get_balance(&self, address: String, block: Option<String>) -> RpcResult<String> {
-        let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
+    async fn get_balance(&self, address: String, _block: Option<String>) -> RpcResult<String> {
+        let _address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -168,10 +168,10 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok("0x0".to_string())
     }
 
-    async fn get_transaction_count(&self, address: String, block: Option<String>) -> RpcResult<String> {
-        let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
+    async fn get_transaction_count(&self, address: String, _block: Option<String>) -> RpcResult<String> {
+        let _address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -183,11 +183,11 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok("0x0".to_string())
     }
 
-    async fn get_storage_at(&self, address: String, slot: String, block: Option<String>) -> RpcResult<String> {
-        let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
-        let slot = utils::parse_hash(&slot).map_err(|e| Self::map_error(e))?;
+    async fn get_storage_at(&self, address: String, slot: String, _block: Option<String>) -> RpcResult<String> {
+        let _address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
+        let _slot = utils::parse_hash(&slot).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -199,10 +199,10 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok("0x0".to_string())
     }
 
-    async fn get_code(&self, address: String, block: Option<String>) -> RpcResult<String> {
-        let address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
+    async fn get_code(&self, address: String, _block: Option<String>) -> RpcResult<String> {
+        let _address = utils::parse_address(&address).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -215,13 +215,13 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn send_raw_transaction(&self, data: String) -> RpcResult<String> {
-        let bytes = utils::hex_to_bytes(&data).map_err(|e| Self::map_error(e))?;
+        let _bytes = utils::hex_to_bytes(&data).map_err(|e| Self::map_error(e))?;
         
         // Parse the raw transaction
         // This is a simplified version - in a real implementation,
         // we would use proper RLP decoding and transaction parsing
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -232,8 +232,8 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
     }
 
-    async fn send_transaction(&self, transaction: TransactionRequest) -> RpcResult<String> {
-        let client = match self.pool.get().await {
+    async fn send_transaction(&self, _transaction: TransactionRequest) -> RpcResult<String> {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -247,8 +247,8 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
     }
 
-    async fn call(&self, transaction: TransactionRequest, block: Option<String>) -> RpcResult<String> {
-        let client = match self.pool.get().await {
+    async fn call(&self, _transaction: TransactionRequest, _block: Option<String>) -> RpcResult<String> {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -262,8 +262,8 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok("0x".to_string())
     }
 
-    async fn estimate_gas(&self, transaction: TransactionRequest, block: Option<String>) -> RpcResult<String> {
-        let client = match self.pool.get().await {
+    async fn estimate_gas(&self, _transaction: TransactionRequest, _block: Option<String>) -> RpcResult<String> {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -278,9 +278,9 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn get_transaction_by_hash(&self, hash: String) -> RpcResult<Option<EthereumTransaction>> {
-        let tx_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
+        let _tx_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -295,9 +295,9 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn get_transaction_receipt(&self, hash: String) -> RpcResult<Option<TransactionReceipt>> {
-        let tx_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
+        let _tx_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -311,10 +311,10 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok(None)
     }
 
-    async fn get_block_by_hash(&self, hash: String, full_transactions: bool) -> RpcResult<Option<Block<serde_json::Value>>> {
-        let block_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
+    async fn get_block_by_hash(&self, hash: String, _full_transactions: bool) -> RpcResult<Option<Block<serde_json::Value>>> {
+        let _block_hash = utils::parse_hash(&hash).map_err(|e| Self::map_error(e))?;
         
-        let client = match self.pool.get().await {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
@@ -328,8 +328,8 @@ impl EthereumApiServer for EthereumApiServerImpl {
         Ok(None)
     }
 
-    async fn get_block_by_number(&self, block: String, full_transactions: bool) -> RpcResult<Option<Block<serde_json::Value>>> {
-        let client = match self.pool.get().await {
+    async fn get_block_by_number(&self, _block: String, _full_transactions: bool) -> RpcResult<Option<Block<serde_json::Value>>> {
+        let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
                 return Err(Self::map_error(AppError::PoolError(e)));
