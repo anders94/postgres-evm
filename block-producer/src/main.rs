@@ -61,7 +61,7 @@ impl BlockProducer {
     }
 
     async fn produce_block(&self) -> Result<i64> {
-        let client = self.pool.get().await?;
+        let mut client = self.pool.get().await?;
         
         // Begin transaction
         let tx = client.transaction().await?;
