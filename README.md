@@ -43,6 +43,23 @@ The application uses the following tables:
 - Rust (stable)
 - PostgreSQL 12+
 
+### Build Instructions
+
+1. Clone the repository and navigate to the project directory:
+
+```bash
+git clone https://github.com/yourusername/postgres-evm.git
+cd postgres-evm
+```
+
+2. Build the project:
+
+```bash
+cargo build --release
+```
+
+This will create executable binaries in the `target/release` directory.
+
 ### Setup
 
 1. Create a PostgreSQL database:
@@ -57,25 +74,51 @@ createdb postgres_evm
 psql -d postgres_evm -f migrations/V1__initial_schema.sql
 ```
 
-3. Copy `config.toml.example' to 'config.toml' and configure the application
+3. Configure the application by editing `config.toml`:
 
 ```bash
-cp config.toml.example config.toml
+# Edit the database connection details and other settings
+nano config.toml
 ```
-And edit to taste.
 
 ### Running
 
 Start the EVM runner:
 
 ```bash
-cargo run -- config.toml
+# Using cargo
+cargo run --release -- config.toml
+
+# Or using the binary directly
+./target/release/postgres-evm config.toml
 ```
 
 Start the block producer:
 
 ```bash
+# Using cargo
+cargo run --release -p block-producer -- --config config.toml --interval 15
+
+# Or using the binary directly
+./target/release/block-producer --config config.toml --interval 15
+```
+
+### Development
+
+For development work, you can use:
+
+```bash
+# Run the EVM runner in debug mode
+cargo run -- config.toml
+
+# Run the block producer in debug mode
 cargo run -p block-producer -- --config config.toml --interval 15
+
+# Run tests
+cargo test
+
+# Check code for issues
+cargo clippy
 ```
 
 ## Configuration
