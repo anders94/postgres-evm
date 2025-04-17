@@ -120,6 +120,7 @@ impl EthereumApiServerImpl {
         Self { pool, chain_id }
     }
 
+    #[allow(dead_code)]
     async fn get_chain_info(&self) -> Result<ChainInfo> {
         let client = self.pool.get().await
             .map_err(|e| AppError::PoolError(e))?;

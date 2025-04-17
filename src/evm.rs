@@ -2,9 +2,9 @@ use deadpool_postgres::Client;
 use ethers_core::types::{H256, U256, H512};
 use primitive_types::H160;
 use revm::{
-    db::Database,
+    
     primitives::{
-        AccountInfo, Address, Bytecode, Env, ExecutionResult, Output, TransactTo, TxEnv, B256, U256 as revmU256, Bytes as revmBytes,
+        Address, Env, ExecutionResult, Output, TransactTo, TxEnv, U256 as revmU256, Bytes as revmBytes,
     },
     EVM,
 };
@@ -12,44 +12,9 @@ use deadpool_postgres::Transaction as PgTransaction;
 
 use crate::errors::{AppError, Result};
 use crate::models::{BlockInfo, ChainInfo, EthereumReceipt, EthereumTransaction, Log};
-use crate::state::PostgresState;
+use crate::state::{PostgresState, PostgresStateStorage};
 
-// Simple database implementation that always returns default values
-pub struct DummyDB;
-
-impl Database for DummyDB {
-    type Error = AppError;
-
-    fn basic(&mut self, _address: Address) -> std::result::Result<Option<AccountInfo>, Self::Error> {
-        // In a production implementation, this would fetch the account from PostgreSQL
-        // For now, we'll return a placeholder implementation
-        Ok(Some(AccountInfo {
-            balance: revmU256::ZERO,
-            nonce: 0,
-            code_hash: B256::ZERO,
-            code: Some(Bytecode::default()),
-            // status field removed as it's no longer in the AccountInfo struct
-        }))
-    }
-
-    fn code_by_hash(&mut self, _code_hash: B256) -> std::result::Result<Bytecode, Self::Error> {
-        // In a production implementation, this would fetch the code from PostgreSQL
-        // For now, we'll return empty code
-        Ok(Bytecode::default())
-    }
-
-    fn storage(&mut self, _address: Address, _index: revmU256) -> std::result::Result<revmU256, Self::Error> {
-        // In a production implementation, this would fetch the storage from PostgreSQL
-        // For now, we'll return zero
-        Ok(revmU256::ZERO)
-    }
-
-    fn block_hash(&mut self, _number: revmU256) -> std::result::Result<B256, Self::Error> {
-        // In a production implementation, this would fetch the block hash from PostgreSQL
-        // For now, we'll return zero
-        Ok(B256::ZERO)
-    }
-}
+// DummyDB has been replaced with PostgresStateStorage
 
 pub struct EVMExecutor {
     chain_id: u64,
@@ -155,8 +120,8 @@ impl EVMExecutor {
                 
         env.tx = tx_env;
                 
-        // Create EVM instance with the database
-        let mut db = DummyDB;
+        // Create EVM instance with the PostgreSQL database
+        let mut db = PostgresStateStorage::new_from_tx(&db_tx);
         let mut evm = EVM::new();
         evm.env = env;
         evm.database(&mut db);
