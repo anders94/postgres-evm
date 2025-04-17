@@ -1,6 +1,6 @@
 # PostgreSQL-EVM
 
-This project implements an Ethereum Virtual Machine (EVM) backed by a PostgreSQL database. It uses `revm` for the EVM implementation and provides a standard Ethereum JSON-RPC interface.
+Implements the Ethereum Virtual Machine (EVM) backed by a PostgreSQL database. Uses `revm` for the EVM implementation and provides a standard Ethereum JSON-RPC interface.
 
 ## Features
 
