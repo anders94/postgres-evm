@@ -31,6 +31,9 @@ pub enum AppError {
 
     #[error("Invalid data: {0}")]
     InvalidData(String),
+    
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
