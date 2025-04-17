@@ -27,5 +27,6 @@ async-trait = "0.1.68"
 
 [workspace]
 members = [
-    "block-producer"
+    "block-producer",
+    "admin-cli"
 ]

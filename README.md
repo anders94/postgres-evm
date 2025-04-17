@@ -14,6 +14,7 @@ Implements the Ethereum Virtual Machine (EVM) backed by a PostgreSQL database. U
 
 1. **EVM Runner**: The main application that provides the RPC interface and executes EVM transactions
 2. **Block Producer**: A separate application that creates blocks by collecting pending transactions
+3. **Admin CLI**: A command-line utility for administrative tasks, such as minting and burning ETH
 
 ## Architecture
 
@@ -114,6 +115,11 @@ cargo run -- config.toml
 # Run the block producer in debug mode
 cargo run -p block-producer -- --config config.toml --interval 15
 
+# Run admin CLI commands
+cargo run -p admin-cli -- --config config.toml balance --address 0x742d35Cc6634C0532925a3b844Bc454e4438f44e
+cargo run -p admin-cli -- --config config.toml mint --address 0x742d35Cc6634C0532925a3b844Bc454e4438f44e --amount 100
+cargo run -p admin-cli -- --config config.toml burn --address 0x742d35Cc6634C0532925a3b844Bc454e4438f44e --amount 50
+
 # Run tests
 cargo test
 
@@ -151,6 +157,34 @@ Example:
 ```bash
 curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://localhost:8545
 ```
+
+## Admin CLI
+
+The Admin CLI provides administrative capabilities for managing the EVM state directly. It allows privileged operations such as minting and burning ETH.
+
+### Usage
+
+```bash
+# Build the admin CLI
+cargo build --release -p admin-cli
+
+# Check an account's balance
+./target/release/admin-cli --config config.toml balance -a 0x742d35Cc6634C0532925a3b844Bc454e4438f44e
+
+# Mint 100 ETH to an account
+./target/release/admin-cli --config config.toml mint -a 0x742d35Cc6634C0532925a3b844Bc454e4438f44e -e 100
+
+# Burn 50 ETH from an account
+./target/release/admin-cli --config config.toml burn -a 0x742d35Cc6634C0532925a3b844Bc454e4438f44e -e 50
+```
+
+### Commands
+
+- `balance`: Get the ETH balance of an address
+- `mint`: Create new ETH and add it to an address
+- `burn`: Remove ETH from an address
+
+These operations modify the database directly and do not create transactions or blocks. They are meant for administrative purposes such as initial setup, testing, or emergency interventions.
 
 ## License
 
