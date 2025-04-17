@@ -1,0 +1,16 @@
+[database]
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+database_name = "postgres_evm"
+max_connections = 20
+
+[server]
+host = "127.0.0.1"
+port = 8545
+
+[chain]
+chain_id = 1337
+# Optional path to genesis state file
+# genesis_state = "genesis.json"
