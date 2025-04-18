@@ -49,7 +49,7 @@ The application uses the following tables:
 1. Clone the repository and navigate to the project directory:
 
 ```bash
-git clone https://github.com/yourusername/postgres-evm.git
+git clone https://github.com/anders94/postgres-evm.git
 cd postgres-evm
 ```
 
