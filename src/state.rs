@@ -2,7 +2,7 @@ use deadpool_postgres::{Client, Transaction};
 use primitive_types::{H160, H256, U256};
 use revm::db::Database;
 use revm::primitives::{
-    AccountInfo, Address, Bytecode, HashMap, U256 as revmU256, B256,
+    AccountInfo, Address, Bytecode, HashMap, U256 as revmU256, B256, KECCAK_EMPTY,
 };
 use std::str::FromStr;
 use revm::primitives::Bytes as revmBytes;
@@ -84,7 +84,7 @@ impl<'a> PostgresState<'a> {
 
     pub async fn get_code(&self, code_hash: &H256) -> Result<Bytecode> {
         if code_hash == &H256::zero() {
-            return Ok(Bytecode::default());
+            return Ok(Bytecode::new_raw(revmBytes::new()));
         }
 
         let key = format!("code-{:?}", code_hash);
@@ -249,35 +249,47 @@ impl<'a> PostgresStateStorage<'a> {
     }
 
     pub async fn convert_to_account_info(&self, account: &Account) -> Result<AccountInfo> {
-        let code = if let Some(code_hash) = account.code_hash {
+        // For externally owned accounts (EOAs), ensure code is empty
+        let (code, code_hash) = if let Some(code_hash) = account.code_hash {
             if code_hash == H256::zero() {
-                Bytecode::default()
-            } else if let Some(code) = &account.code {
-                Bytecode::new_raw(revmBytes::from(code.clone()))
+                // Zero code hash means no code - use KECCAK_EMPTY for EOA accounts
+                (Bytecode::new_raw(revmBytes::new()), KECCAK_EMPTY)
+            } else if let Some(code_bytes) = &account.code {
+                // Account has inline code
+                let code = Bytecode::new_raw(revmBytes::from(code_bytes.clone()));
+                let hash_bytes: [u8; 32] = code_hash.into();
+                (code, B256::from(hash_bytes))
             } else {
+                // Account has code hash but no inline code - fetch from storage
                 let postgres_state = match &self.connection {
                     PostgresConnection::Client(client) => PostgresState::new(client),
                     PostgresConnection::Transaction(tx) => PostgresState::new_from_tx(tx),
                 };
-                postgres_state.get_code(&code_hash).await?
+                let code = postgres_state.get_code(&code_hash).await?;
+                let hash_bytes: [u8; 32] = code_hash.into();
+                (code, B256::from(hash_bytes))
             }
         } else {
-            Bytecode::default()
+            // No code hash specified - this is an EOA
+            (Bytecode::new_raw(revmBytes::new()), KECCAK_EMPTY)
         };
 
-        let code_hash = if let Some(hash) = account.code_hash {
+        // Convert U256 to revmU256 safely without going through u64
+        let balance_bytes = {
             let mut bytes = [0u8; 32];
-            bytes.copy_from_slice(hash.as_bytes());
-            B256::from(bytes)
-        } else {
-            B256::ZERO
+            account.balance.to_big_endian(&mut bytes);
+            bytes
         };
-
+        let balance = revmU256::from_be_bytes(balance_bytes);
+        
+        println!("🔍 Account {} - Balance: {}, Nonce: {}, Code Hash: {:?}, Has Code: {}, Code bytes len: {}", 
+                account.balance, balance, account.nonce.as_u64(), code_hash, code.bytes().len() > 0, code.bytes().len());
+        
         Ok(AccountInfo {
-            balance: revmU256::from(account.balance.as_u64()),
+            balance,
             nonce: account.nonce.as_u64(),
             code_hash,
-            code: Some(code),
+            code: if code.bytes().is_empty() { None } else { Some(code) },
         })
     }
 
@@ -301,8 +313,8 @@ impl<'a> PostgresStateStorage<'a> {
             let empty_account = AccountInfo {
                 balance: revmU256::ZERO,
                 nonce: 0,
-                code_hash: B256::ZERO,
-                code: Some(Bytecode::default()),
+                code_hash: KECCAK_EMPTY,
+                code: None,
             };
             self.accounts_cache.insert(address, empty_account.clone());
             Ok(empty_account)
@@ -398,9 +410,11 @@ impl<'a> Database for PostgresStateStorage<'a> {
     fn basic(&mut self, address: Address) -> std::result::Result<Option<AccountInfo>, Self::Error> {
         // Convert to H160 for our storage
         let h160_address = self.to_primitive_address(&address);
+        println!("🔍 REVM querying basic info for address: {}", h160_address);
         
         // First, check our cache
         if let Some(account) = self.accounts_cache.get(&h160_address) {
+            println!("💰 Found cached account {} with balance {}", h160_address, account.balance);
             return Ok(Some(account.clone()));
         }
         
@@ -435,12 +449,18 @@ impl<'a> Database for PostgresStateStorage<'a> {
                             })
                         })?;
                         
+                        println!("📊 Loaded account {} from DB with balance {}, has code: {}, code len: {}", 
+                                h160_address, account_info.balance, 
+                                account_info.code.as_ref().map_or(false, |c| c.bytes().len() > 0),
+                                account_info.code.as_ref().map_or(0, |c| c.bytes().len()));
+                        
                         // Cache the result
                         self.accounts_cache.insert(h160_address, account_info.clone());
                         Ok(Some(account_info))
                     },
                     None => {
                         // Account doesn't exist
+                        println!("❌ Account {} not found in database", h160_address);
                         Ok(None)
                     }
                 }

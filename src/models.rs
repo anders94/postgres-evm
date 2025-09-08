@@ -1,7 +1,61 @@
-use ethers_core::types::{Transaction, H256 as EthH256, U256 as EthU256, U64 as EthU64};
-use primitive_types::{H160, H256, H512, U256};
+use ethers_core::types::{Transaction, H256 as EthH256, U256 as EthU256, U64 as EthU64, Bloom};
+use primitive_types::{H160, H256, U256};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+
+mod hex_bytes {
+    use serde::{Deserializer, Serializer};
+    
+    pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hex_string = if bytes.is_empty() {
+            "0x".to_string()
+        } else {
+            format!("0x{}", hex::encode(bytes))
+        };
+        serializer.serialize_str(&hex_string)
+    }
+    
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{Error, SeqAccess, Visitor};
+        
+        struct BytesVisitor;
+        
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+            
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a hex string or byte array")
+            }
+            
+            fn visit_str<E>(self, value: &str) -> Result<Vec<u8>, E>
+            where
+                E: Error,
+            {
+                let hex_string = value.strip_prefix("0x").unwrap_or(value);
+                hex::decode(hex_string).map_err(Error::custom)
+            }
+            
+            fn visit_seq<A>(self, mut seq: A) -> Result<Vec<u8>, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut vec = Vec::new();
+                while let Some(elem) = seq.next_element::<u8>()? {
+                    vec.push(elem);
+                }
+                Ok(vec)
+            }
+        }
+        
+        deserializer.deserialize_any(BytesVisitor)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateEntry {
@@ -70,6 +124,7 @@ pub struct EthereumTransaction {
     pub max_fee_per_gas: Option<U256>,
     pub max_priority_fee_per_gas: Option<U256>,
     pub gas: U256,
+    #[serde(with = "hex_bytes")]
     pub input: Vec<u8>,
     pub v: U256,
     pub r: U256,
@@ -164,7 +219,7 @@ pub struct EthereumReceipt {
     pub logs: Vec<Log>,
     pub status: Option<U256>,
     pub root: Option<H256>,
-    pub logs_bloom: H512,
+    pub logs_bloom: Bloom,
     pub transaction_type: Option<U256>,
     pub effective_gas_price: Option<U256>,
 }

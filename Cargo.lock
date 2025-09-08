@@ -1916,6 +1916,7 @@ dependencies = [
  "hex",
  "jsonrpsee",
  "primitive-types",
+ "rand 0.8.5",
  "revm",
  "serde",
  "serde_json",

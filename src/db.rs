@@ -51,5 +51,29 @@ pub async fn init_db(pool: &Pool) -> Result<()> {
         ));
     }
     
+    // Check if we have any blocks, and create a genesis block if not
+    let block_count = client
+        .query_one("SELECT COUNT(*) FROM blocks", &[])
+        .await?;
+    let count: i64 = block_count.get(0);
+    
+    if count == 0 {
+        // Create genesis block
+        let genesis_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
+        let genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        let parent_hash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+        
+        client.execute(
+            "INSERT INTO blocks (number, hash, parent_hash, timestamp, gas_limit, gas_used, base_fee_per_gas) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[&0i64, &genesis_hash, &parent_hash, &genesis_timestamp, &15_000_000i64, &0i64, &1_000_000_000i64],
+        ).await?;
+        
+        tracing::info!("Created genesis block with hash {}", genesis_hash);
+    }
+    
     Ok(())
 }
