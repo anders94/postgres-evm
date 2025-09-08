@@ -4,7 +4,7 @@ use primitive_types::H160;
 use revm::{
     
     primitives::{
-        Address, Env, ExecutionResult, Output, TransactTo, TxEnv, U256 as revmU256, Bytes as revmBytes,
+        Address, Env, ExecutionResult, Output, TransactTo, TxEnv, U256 as revmU256, Bytes as revmBytes, KECCAK_EMPTY,
     },
     EVM,
 };
@@ -208,6 +208,55 @@ impl EVMExecutor {
             }
         };
                 
+        // Apply state changes to database
+        let postgres_state = PostgresState::new_from_tx(&db_tx);
+        for (address, account) in result_and_state.state {
+            if account.is_touched() {
+                let h160_address = {
+                    let bytes: [u8; 20] = address.into();
+                    H160::from(bytes)
+                };
+                
+                // Convert AccountInfo back to Account model
+                let account_model = crate::models::Account {
+                    nonce: U256::from(account.info.nonce),
+                    balance: {
+                        let balance_bytes = account.info.balance.to_be_bytes::<32>();
+                        U256::from_big_endian(&balance_bytes)
+                    },
+                    code_hash: if account.info.code_hash == KECCAK_EMPTY {
+                        Some(H256::zero())
+                    } else {
+                        let hash_bytes: [u8; 32] = account.info.code_hash.into();
+                        Some(H256::from(hash_bytes))
+                    },
+                    code: account.info.code.map(|c| c.bytes().to_vec()),
+                };
+                
+                postgres_state.set_account(&h160_address, &account_model).await?;
+                
+                // Store code if it's new
+                if let Some(code) = &account_model.code {
+                    if !code.is_empty() && account_model.code_hash.is_some() {
+                        postgres_state.set_code(&account_model.code_hash.unwrap(), code).await?;
+                    }
+                }
+                
+                // Store any storage changes
+                for (slot, value) in account.storage {
+                    let slot_h256 = {
+                        let slot_bytes = slot.to_be_bytes::<32>();
+                        H256::from(slot_bytes)
+                    };
+                    let value_h256 = {
+                        let value_bytes = value.present_value.to_be_bytes::<32>();
+                        H256::from(value_bytes)
+                    };
+                    postgres_state.set_storage(&h160_address, &slot_h256, &value_h256).await?;
+                }
+            }
+        }
+        
         // Process execution result
         let receipt = match result_and_state.result {
             ExecutionResult::Success { output, gas_used, gas_refunded, logs, .. } => {
@@ -407,6 +456,55 @@ impl EVMExecutor {
                 
         // Execute transaction
         let result = evm.transact().map_err(|e| AppError::EVMError(format!("{:?}", e)))?;
+        
+        // Apply state changes to database
+        let postgres_state = PostgresState::new_from_tx(db_tx);
+        for (address, account) in result.state {
+            if account.is_touched() {
+                let h160_address = {
+                    let bytes: [u8; 20] = address.into();
+                    H160::from(bytes)
+                };
+                
+                // Convert AccountInfo back to Account model
+                let account_model = crate::models::Account {
+                    nonce: U256::from(account.info.nonce),
+                    balance: {
+                        let balance_bytes = account.info.balance.to_be_bytes::<32>();
+                        U256::from_big_endian(&balance_bytes)
+                    },
+                    code_hash: if account.info.code_hash == KECCAK_EMPTY {
+                        Some(H256::zero())
+                    } else {
+                        let hash_bytes: [u8; 32] = account.info.code_hash.into();
+                        Some(H256::from(hash_bytes))
+                    },
+                    code: account.info.code.map(|c| c.bytes().to_vec()),
+                };
+                
+                postgres_state.set_account(&h160_address, &account_model).await?;
+                
+                // Store code if it's new
+                if let Some(code) = &account_model.code {
+                    if !code.is_empty() && account_model.code_hash.is_some() {
+                        postgres_state.set_code(&account_model.code_hash.unwrap(), code).await?;
+                    }
+                }
+                
+                // Store any storage changes
+                for (slot, value) in account.storage {
+                    let slot_h256 = {
+                        let slot_bytes = slot.to_be_bytes::<32>();
+                        H256::from(slot_bytes)
+                    };
+                    let value_h256 = {
+                        let value_bytes = value.present_value.to_be_bytes::<32>();
+                        H256::from(value_bytes)
+                    };
+                    postgres_state.set_storage(&h160_address, &slot_h256, &value_h256).await?;
+                }
+            }
+        }
                 
         // Create receipt based on result
         let receipt = match result.result {
