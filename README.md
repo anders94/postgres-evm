@@ -116,29 +116,51 @@ cargo run --release -- config.toml
 
 2. **Start the block producer** (in a separate terminal):
 ```bash
-cargo run --release -p block-producer -- --config config.toml --interval 15
+cargo run --release -p block-producer -- --config config.toml --interval 10
 ```
 
 The system is now ready to accept Ethereum transactions on `http://localhost:8545`.
 
 ## Usage Examples
 
-### Deploy a Smart Contract
+These examples depend on a pre-funded demo account at the address
+`0xC282426C5a39E5fE1048eE4Dc04428584a86E5b5` with the private key
+`0x67dafebfbd8aaeddf41f0e42907991bc8384598ce6b6f64b4512cc22d966bbb4`.
 
-The repository includes example scripts for contract deployment:
+### Setup
+
+Prerequisites for running the examples.
 
 ```bash
 cd examples
 npm install
 
+# Set up the environment (private key and RPC URL)
+cp .env-example .env
+
+# Mint 100 ETH to the demo account
+cargo run -p admin-cli -- --config config.toml mint -a 0xC282426C5a39E5fE1048eE4Dc04428584a86E5b5 -e 100
+```
+
+### Send ETH
+
+This script sends 0.001 ETH from the account with the private key in the `.env`
+file to `0x742d35cc6635c0532925a3b8d8c4637ae4b3e91e` which is a random test address.
+
+```bash
+node test-simple-transaction.js
+```
+
+### Contract Deployment
+
+The repository includes example scripts for contract deployment:
+
+```bash
 # Deploy a minimal test contract
 node deploy-minimal-test.js
 
 # Deploy an ERC-20 token
 node deploy-erc20.js
-
-# Send a simple transaction
-node test-simple-transaction.js
 ```
 
 ### JSON-RPC API Usage
