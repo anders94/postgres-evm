@@ -285,7 +285,7 @@ impl<'a> PostgresStateStorage<'a> {
         };
         let balance = revmU256::from_be_bytes(balance_bytes);
         
-        println!("🔍 Account {} - Balance: {}, Nonce: {}, Code Hash: {:?}, Has Code: {}, Code bytes len: {}", 
+        crate::verbose_println!("🔍 Account {} - Balance: {}, Nonce: {}, Code Hash: {:?}, Has Code: {}, Code bytes len: {}", 
                 account.balance, balance, account.nonce.as_u64(), code_hash, code.bytes().len() > 0, code.bytes().len());
         
         Ok(AccountInfo {
@@ -413,11 +413,11 @@ impl<'a> Database for PostgresStateStorage<'a> {
     fn basic(&mut self, address: Address) -> std::result::Result<Option<AccountInfo>, DatabaseError> {
         // Convert to H160 for our storage
         let h160_address = self.to_primitive_address(&address);
-        println!("🔍 REVM querying basic info for address: {}", h160_address);
+        crate::verbose_println!("🔍 REVM querying basic info for address: {}", h160_address);
         
         // First, check our cache
         if let Some(account) = self.accounts_cache.get(&h160_address) {
-            println!("💰 Found cached account {} with balance {}", h160_address, account.balance);
+            crate::verbose_println!("💰 Found cached account {} with balance {}", h160_address, account.balance);
             return Ok(Some(account.clone()));
         }
         
@@ -452,7 +452,7 @@ impl<'a> Database for PostgresStateStorage<'a> {
                             })
                         })?;
                         
-                        println!("📊 Loaded account {} from DB with balance {}, has code: {}, code len: {}", 
+                        crate::verbose_println!("📊 Loaded account {} from DB with balance {}, has code: {}, code len: {}", 
                                 h160_address, account_info.balance, 
                                 account_info.code.as_ref().map_or(false, |c| c.bytes().len() > 0),
                                 account_info.code.as_ref().map_or(0, |c| c.bytes().len()));
@@ -463,7 +463,7 @@ impl<'a> Database for PostgresStateStorage<'a> {
                     },
                     None => {
                         // Account doesn't exist - return empty account
-                        println!("❌ Account {} not found in database, creating empty account", h160_address);
+                        crate::verbose_println!("❌ Account {} not found in database, creating empty account", h160_address);
                         
                         // Create an empty account with proper defaults for contract creation
                         let empty_account = AccountInfo {
@@ -475,7 +475,7 @@ impl<'a> Database for PostgresStateStorage<'a> {
                         
                         // For contract creation, we should not cache the empty account
                         // as REVM will modify it during creation
-                        println!("📝 Created empty account for {}", h160_address);
+                        crate::verbose_println!("📝 Created empty account for {}", h160_address);
                         Ok(Some(empty_account))
                     }
                 }

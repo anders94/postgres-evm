@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod errors;
 pub mod evm;
+pub mod logging;
 pub mod models;
 pub mod rpc;
 pub mod state;

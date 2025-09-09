@@ -105,7 +105,7 @@ impl EVMExecutor {
 
     pub async fn execute_transaction(&self, client: &mut Client, tx: &EthereumTransaction) -> Result<EthereumReceipt> {
         // Pre-load account states from committed state before starting transaction
-        println!("🔍 Transaction from address: {}", tx.from);
+        crate::verbose_println!("🔍 Transaction from address: {}", tx.from);
         let committed_state = crate::state::PostgresState::new(client);
         let sender_account = committed_state.get_account(&tx.from).await.ok().flatten();
         let recipient_account = if let Some(to) = tx.to {
@@ -120,12 +120,12 @@ impl EVMExecutor {
         // Pre-populate the transaction with existing account states from committed state
         // This ensures that funded accounts maintain their balance during EVM execution
         if let Some(sender_account) = sender_account {
-            println!("🔄 Pre-loading sender account {} with balance {}", tx.from, sender_account.balance);
+            crate::verbose_println!("🔄 Pre-loading sender account {} with balance {}", tx.from, sender_account.balance);
             tracing::info!("Pre-loading sender account {} with balance {}", tx.from, sender_account.balance);
             let tx_state = crate::state::PostgresState::new_from_tx(&db_tx);
             tx_state.set_account(&tx.from, &sender_account).await?;
         } else {
-            println!("⚠️  No existing account found for sender {}", tx.from);
+            crate::verbose_println!("⚠️  No existing account found for sender {}", tx.from);
             tracing::warn!("No existing account found for sender {}", tx.from);
         }
         
@@ -166,7 +166,7 @@ impl EVMExecutor {
             bytes
         };
         tx_env.nonce = revmU256::from_be_bytes(nonce_bytes).as_limbs()[0] as u64;
-        println!("🔧 Set EVM transaction nonce to: {}", tx.nonce);
+        crate::verbose_println!("🔧 Set EVM transaction nonce to: {}", tx.nonce);
         // Handle EIP-1559 vs legacy gas pricing
         if let (Some(max_fee), Some(_max_priority)) = (tx.max_fee_per_gas, tx.max_priority_fee_per_gas) {
             // For EIP-1559 transactions, use max_fee as gas_price
@@ -204,7 +204,7 @@ impl EVMExecutor {
             tx_env.kind = TxKind::Call(Address::from(to_bytes));
         } else {
             tx_env.kind = TxKind::Create;
-            println!("🔧 Setting up contract creation transaction");
+            crate::verbose_println!("🔧 Setting up contract creation transaction");
         }
                 
         // Execute EVM transaction synchronously to avoid Send/Sync issues
@@ -286,25 +286,25 @@ impl EVMExecutor {
         }
         
         // Process execution result
-        println!("🎯 EVM execution completed");
+        crate::verbose_println!("🎯 EVM execution completed");
         let receipt = match result_and_state.result {
             ExecutionResult::Success { reason: _, output, gas_used, gas_refunded, logs } => {
-                println!("✅ EVM execution succeeded, gas_used: {}", gas_used);
+                crate::verbose_println!("✅ EVM execution succeeded, gas_used: {}", gas_used);
                 // Handle output (contract creation or call result)
                 let contract_address = match output {
                     Output::Create(_, contract_addr_opt) => {
                         if let Some(addr) = contract_addr_opt {
                             let bytes: [u8; 20] = addr.into();
                             let contract_addr = H160::from(bytes);
-                            println!("🎉 Contract created at address: {:?}", contract_addr);
+                            crate::verbose_println!("🎉 Contract created at address: {:?}", contract_addr);
                             Some(contract_addr)
                         } else {
-                            println!("❌ Contract creation failed - no address returned");
+                            crate::verbose_println!("❌ Contract creation failed - no address returned");
                             None
                         }
                     },
                     _ => {
-                        println!("📞 Regular transaction call (not contract creation)");
+                        crate::verbose_println!("📞 Regular transaction call (not contract creation)");
                         None
                     }
                 };
@@ -353,7 +353,7 @@ impl EVMExecutor {
                 }
             },
             ExecutionResult::Revert { gas_used, output } => {
-                println!("❌ EVM execution reverted, gas_used: {}, output: {:?}", gas_used, output);
+                crate::verbose_println!("❌ EVM execution reverted, gas_used: {}, output: {:?}", gas_used, output);
                 // Create failed receipt
                 EthereumReceipt {
                     transaction_hash: tx.hash,
@@ -374,7 +374,7 @@ impl EVMExecutor {
                 }
             },
             ExecutionResult::Halt { reason, gas_used } => {
-                println!("🛑 EVM execution halted, reason: {:?}, gas_used: {}", reason, gas_used);
+                crate::verbose_println!("🛑 EVM execution halted, reason: {:?}, gas_used: {}", reason, gas_used);
                 // Create failed receipt
                 EthereumReceipt {
                     transaction_hash: tx.hash,
@@ -419,7 +419,7 @@ impl EVMExecutor {
         // Pre-load account states from committed state before execution
         // Note: We need to get a regular client to read committed state
         // For now, we'll skip the pre-loading in this version and rely on the existing DB transaction
-        println!("🔍 Transaction from address: {}", tx.from);
+        crate::verbose_println!("🔍 Transaction from address: {}", tx.from);
         
         // Pre-populate the transaction with existing account states
         // This is simpler since we're already in a transaction context
@@ -455,7 +455,7 @@ impl EVMExecutor {
             bytes
         };
         tx_env.nonce = revmU256::from_be_bytes(nonce_bytes).as_limbs()[0] as u64;
-        println!("🔧 Set EVM transaction nonce to: {}", tx.nonce);
+        crate::verbose_println!("🔧 Set EVM transaction nonce to: {}", tx.nonce);
         // Handle EIP-1559 vs legacy gas pricing
         if let (Some(max_fee), Some(_max_priority)) = (tx.max_fee_per_gas, tx.max_priority_fee_per_gas) {
             // For EIP-1559 transactions, use max_fee as gas_price
@@ -493,7 +493,7 @@ impl EVMExecutor {
             tx_env.kind = TxKind::Call(Address::from(to_bytes));
         } else {
             tx_env.kind = TxKind::Create;
-            println!("🔧 Setting up contract creation transaction");
+            crate::verbose_println!("🔧 Setting up contract creation transaction");
         }
                 
         // Execute EVM transaction synchronously to avoid Send/Sync issues
@@ -578,15 +578,15 @@ impl EVMExecutor {
                         if let Some(addr) = contract_addr_opt {
                             let bytes: [u8; 20] = addr.into();
                             let contract_addr = H160::from(bytes);
-                            println!("🎉 Contract created at address: {:?}", contract_addr);
+                            crate::verbose_println!("🎉 Contract created at address: {:?}", contract_addr);
                             Some(contract_addr)
                         } else {
-                            println!("❌ Contract creation failed - no address returned");
+                            crate::verbose_println!("❌ Contract creation failed - no address returned");
                             None
                         }
                     },
                     _ => {
-                        println!("📞 Regular transaction call (not contract creation)");
+                        crate::verbose_println!("📞 Regular transaction call (not contract creation)");
                         None
                     }
                 };
@@ -650,7 +650,7 @@ impl EVMExecutor {
                 }
             },
             ExecutionResult::Halt { reason, gas_used } => {
-                println!("🛑 EVM execution halted, reason: {:?}, gas_used: {}", reason, gas_used);
+                crate::verbose_println!("🛑 EVM execution halted, reason: {:?}, gas_used: {}", reason, gas_used);
                 // Create failed receipt
                 EthereumReceipt {
                     transaction_hash: tx.hash,

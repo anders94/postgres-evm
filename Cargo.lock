@@ -2558,6 +2558,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "clap",
  "config",
  "deadpool",
  "deadpool-postgres",

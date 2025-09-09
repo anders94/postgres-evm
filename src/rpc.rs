@@ -248,7 +248,7 @@ impl EthereumApiServerImpl {
             if let Ok(nonce_bytes) = nonce_rlp.data() {
                 if !nonce_bytes.is_empty() {
                     tx.nonce = ethers_core::types::U256::from_big_endian(nonce_bytes);
-                    println!("🔧 Parsed nonce from EIP-{} transaction: {}", tx_type, tx.nonce);
+                    crate::verbose_println!("🔧 Parsed nonce from EIP-{} transaction: {}", tx_type, tx.nonce);
                 }
             }
         }
@@ -266,7 +266,7 @@ impl EthereumApiServerImpl {
             _ => return Err(format!("Unsupported transaction type: {}", tx_type)),
         }
         
-        println!("✅ Successfully parsed EIP-{} transaction with nonce {} and to {:?}", tx_type, tx.nonce, tx.to);
+        crate::verbose_println!("✅ Successfully parsed EIP-{} transaction with nonce {} and to {:?}", tx_type, tx.nonce, tx.to);
         Ok(tx)
     }
 
@@ -344,7 +344,7 @@ impl EthereumApiServerImpl {
                             tx.v = ethers_core::types::U64::from(v_value.low_u64());
                         }
                     }
-                    println!("🔧 Parsed v (yParity): {}", tx.v);
+                    crate::verbose_println!("🔧 Parsed v (yParity): {}", tx.v);
                 }
             }
         }
@@ -853,7 +853,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
             // For now, let's manually create a transaction with the correct nonce
             // Since we know the client is correctly generating the transaction with nonce 5,
             // and we confirmed this in the debug output, let's hardcode it temporarily
-            println!("🔍 Parsing EIP-{} transaction envelope", tx_type);
+            crate::verbose_println!("🔍 Parsing EIP-{} transaction envelope", tx_type);
             
             let mut tx = ethers_core::types::Transaction::default();
             tx.transaction_type = Some(ethers_core::types::U64::from(tx_type));
@@ -862,10 +862,10 @@ impl EthereumApiServer for EthereumApiServerImpl {
             match self.parse_eip_transaction(payload, tx_type) {
                 Ok(parsed_tx) => {
                     tx = parsed_tx;
-                    println!("🔧 Successfully parsed EIP-{} transaction with nonce {}", tx_type, tx.nonce);
+                    crate::verbose_println!("🔧 Successfully parsed EIP-{} transaction with nonce {}", tx_type, tx.nonce);
                 },
                 Err(e) => {
-                    println!("⚠️  Failed to parse EIP-{} transaction: {}. Using fallback approach.", tx_type, e);
+                    crate::verbose_println!("⚠️  Failed to parse EIP-{} transaction: {}. Using fallback approach.", tx_type, e);
                     // Fallback: try to recover what we can
                     tx.transaction_type = Some(ethers_core::types::U64::from(tx_type));
                     return Err(Self::map_error(AppError::EncodingError(format!("Failed to parse EIP-{} transaction: {}", tx_type, e))));
