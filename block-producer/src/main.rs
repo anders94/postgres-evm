@@ -1,6 +1,5 @@
 use clap::Parser;
 use deadpool_postgres::Pool;
-// No Ethereum types needed
 use postgres_evm::{
     config::Config,
     db::{create_pool, init_db},
@@ -43,25 +42,28 @@ impl BlockProducer {
     }
 
     async fn start(&self) -> Result<()> {
-        info!("Block producer started with interval: {:?}", self.interval);
+        info!("🏭 Block producer started with interval: {:?}", self.interval);
+        info!("⏰ Will produce blocks every {} seconds", self.interval.as_secs());
         
         let mut interval = time::interval(self.interval);
         
         loop {
             interval.tick().await;
             
+            info!("🔄 Block production cycle started...");
             match self.produce_block().await {
-                Ok(block_number) => {
-                    info!("Successfully produced block #{}", block_number);
+                Ok((block_number, summary)) => {
+                    info!("✅ Successfully produced block #{}", block_number);
+                    info!("📊 Block Summary: {}", summary);
                 }
                 Err(e) => {
-                    error!("Failed to produce block: {}", e);
+                    error!("❌ Failed to produce block: {}", e);
                 }
             }
         }
     }
 
-    async fn produce_block(&self) -> Result<i64> {
+    async fn produce_block(&self) -> Result<(i64, String)> {
         let mut client = self.pool.get().await?;
         
         // Begin transaction
@@ -97,12 +99,18 @@ impl BlockProducer {
         
         if rows.is_empty() {
             tx.rollback().await?;
-            info!("No pending transactions, skipping block production");
-            return Ok(block_number);
+            let summary = "No pending transactions, skipping block production";
+            info!("⏭️  {}", summary);
+            return Ok((block_number, summary.to_string()));
         }
         
         let mut transactions = Vec::with_capacity(rows.len());
         let mut gas_used: i64 = 0;
+        let mut successful_txs = 0;
+        let mut failed_txs = 0;
+        let mut contract_creations = 0;
+        
+        info!("🔍 Processing {} pending transactions...", rows.len());
         
         for row in &rows {
             let hash: String = row.get(0);
@@ -113,6 +121,17 @@ impl BlockProducer {
                 .map_err(|e| AppError::EncodingError(format!("Failed to decode receipt: {}", e)))?;
             
             gas_used += receipt.gas_used.as_u64() as i64;
+            
+            // Count transaction types
+            if receipt.status == Some(primitive_types::U256::one()) {
+                successful_txs += 1;
+                if receipt.contract_address.is_some() {
+                    contract_creations += 1;
+                }
+            } else {
+                failed_txs += 1;
+            }
+            
             transactions.push(hash);
         }
         
@@ -163,14 +182,22 @@ impl BlockProducer {
         // Commit the transaction
         tx.commit().await?;
         
-        info!(
-            "Produced block #{} with {} transactions, gas used: {}", 
-            block_number, 
+        let summary = format!(
+            "{} transactions (✅ {} successful, ❌ {} failed, 📄 {} contracts), ⛽ {} gas used",
             transactions.len(),
+            successful_txs,
+            failed_txs,
+            contract_creations,
             gas_used
         );
         
-        Ok(block_number)
+        info!(
+            "📦 Finalized block #{}: {}", 
+            block_number, 
+            summary
+        );
+        
+        Ok((block_number, summary))
     }
 }
 

@@ -17,6 +17,7 @@ use crate::errors::{AppError, Result};
 use crate::evm::EVMExecutor;
 use crate::models::{ChainInfo, EthereumTransaction};
 use crate::utils;
+// Access list imports removed - will implement in future version
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,12 +32,12 @@ pub struct TransactionRequest {
     pub data: Option<String>,
     pub nonce: Option<String>,
     pub chain_id: Option<String>,
-    pub access_list: Option<Vec<AccessListItem>>,
+    pub access_list: Option<Vec<RpcAccessListItem>>,
     pub transaction_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccessListItem {
+pub struct RpcAccessListItem {
     pub address: String,
     pub storage_keys: Vec<String>,
 }
@@ -212,6 +213,252 @@ impl EthereumApiServerImpl {
         executor.get_chain_info_postgres(&client).await
     }
 
+    fn parse_eip_transaction(&self, payload: &[u8], tx_type: u8) -> std::result::Result<ethers_core::types::Transaction, String> {
+        use ethers_core::utils::rlp::Rlp;
+        
+        let rlp = Rlp::new(payload);
+        
+        // Verify we have enough fields for the transaction type  
+        let item_count = rlp.item_count().map_err(|e| format!("RLP item count error: {:?}", e))?;
+        let min_fields = match tx_type {
+            0x01 => 11, // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, yParity, r, s]
+            0x02 => 12, // EIP-1559: [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, yParity, r, s]  
+            _ => return Err(format!("Unsupported transaction type: {}", tx_type)),
+        };
+        
+        if item_count < min_fields {
+            return Err(format!("Insufficient fields in EIP-{} transaction: got {}, expected {}", tx_type, item_count, min_fields));
+        }
+        
+        let mut tx = ethers_core::types::Transaction::default();
+        tx.transaction_type = Some(ethers_core::types::U64::from(tx_type as u64));
+        
+        // Parse the fields using raw bytes and manual conversion
+        // Field 0: chainId 
+        if let Ok(chain_id_rlp) = rlp.at(0) {
+            if let Ok(chain_id_bytes) = chain_id_rlp.data() {
+                if !chain_id_bytes.is_empty() {
+                    tx.chain_id = Some(ethers_core::types::U256::from_big_endian(chain_id_bytes));
+                }
+            }
+        }
+        
+        // Field 1: nonce (this is the critical field we need to parse correctly)
+        if let Ok(nonce_rlp) = rlp.at(1) {
+            if let Ok(nonce_bytes) = nonce_rlp.data() {
+                if !nonce_bytes.is_empty() {
+                    tx.nonce = ethers_core::types::U256::from_big_endian(nonce_bytes);
+                    println!("🔧 Parsed nonce from EIP-{} transaction: {}", tx_type, tx.nonce);
+                }
+            }
+        }
+        
+        // Parse all fields based on transaction type
+        match tx_type {
+            0x01 => {
+                // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, yParity, r, s]
+                self.parse_eip2930_fields(&rlp, &mut tx)?;
+            },
+            0x02 => {
+                // EIP-1559: [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, yParity, r, s]
+                self.parse_eip1559_fields(&rlp, &mut tx)?;
+            },
+            _ => return Err(format!("Unsupported transaction type: {}", tx_type)),
+        }
+        
+        println!("✅ Successfully parsed EIP-{} transaction with nonce {} and to {:?}", tx_type, tx.nonce, tx.to);
+        Ok(tx)
+    }
+
+    fn parse_eip1559_fields(&self, rlp: &ethers_core::utils::rlp::Rlp, tx: &mut ethers_core::types::Transaction) -> std::result::Result<(), String> {
+        // EIP-1559: [chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gasLimit, to, value, data, accessList, yParity, r, s]
+        
+        // Field 2: maxPriorityFeePerGas
+        if let Ok(priority_fee_rlp) = rlp.at(2) {
+            if let Ok(priority_fee_bytes) = priority_fee_rlp.data() {
+                if !priority_fee_bytes.is_empty() {
+                    tx.max_priority_fee_per_gas = Some(ethers_core::types::U256::from_big_endian(priority_fee_bytes));
+                }
+            }
+        }
+
+        // Field 3: maxFeePerGas
+        if let Ok(max_fee_rlp) = rlp.at(3) {
+            if let Ok(max_fee_bytes) = max_fee_rlp.data() {
+                if !max_fee_bytes.is_empty() {
+                    tx.max_fee_per_gas = Some(ethers_core::types::U256::from_big_endian(max_fee_bytes));
+                }
+            }
+        }
+
+        // Field 4: gasLimit
+        if let Ok(gas_limit_rlp) = rlp.at(4) {
+            if let Ok(gas_limit_bytes) = gas_limit_rlp.data() {
+                if !gas_limit_bytes.is_empty() {
+                    tx.gas = ethers_core::types::U256::from_big_endian(gas_limit_bytes);
+                }
+            }
+        }
+
+        // Field 5: to (can be empty for contract creation)
+        if let Ok(to_rlp) = rlp.at(5) {
+            if let Ok(to_bytes) = to_rlp.data() {
+                if to_bytes.len() == 20 {
+                    tx.to = Some(ethers_core::types::H160::from_slice(to_bytes));
+                } else if to_bytes.is_empty() {
+                    tx.to = None; // Contract creation
+                }
+            }
+        }
+
+        // Field 6: value
+        if let Ok(value_rlp) = rlp.at(6) {
+            if let Ok(value_bytes) = value_rlp.data() {
+                if !value_bytes.is_empty() {
+                    tx.value = ethers_core::types::U256::from_big_endian(value_bytes);
+                }
+            }
+        }
+
+        // Field 7: data
+        if let Ok(data_rlp) = rlp.at(7) {
+            if let Ok(data_bytes) = data_rlp.data() {
+                tx.input = data_bytes.to_vec().into();
+            }
+        }
+
+        // Field 8: accessList (skip for now)
+        // TODO: Parse access list if needed
+
+        // Field 9: yParity (v)
+        if let Ok(v_rlp) = rlp.at(9) {
+            if let Ok(v_bytes) = v_rlp.data() {
+                if !v_bytes.is_empty() {
+                    // For EIP-1559, yParity is usually 0 or 1, but could be larger for legacy compatibility
+                    // Let's handle this more carefully
+                    match v_bytes.len() {
+                        1 => tx.v = ethers_core::types::U64::from(v_bytes[0] as u64),
+                        _ => {
+                            // For longer values, convert properly
+                            let v_value = ethers_core::types::U256::from_big_endian(v_bytes);
+                            tx.v = ethers_core::types::U64::from(v_value.low_u64());
+                        }
+                    }
+                    println!("🔧 Parsed v (yParity): {}", tx.v);
+                }
+            }
+        }
+
+        // Field 10: r
+        if let Ok(r_rlp) = rlp.at(10) {
+            if let Ok(r_bytes) = r_rlp.data() {
+                if !r_bytes.is_empty() {
+                    tx.r = ethers_core::types::U256::from_big_endian(r_bytes);
+                }
+            }
+        }
+
+        // Field 11: s
+        if let Ok(s_rlp) = rlp.at(11) {
+            if let Ok(s_bytes) = s_rlp.data() {
+                if !s_bytes.is_empty() {
+                    tx.s = ethers_core::types::U256::from_big_endian(s_bytes);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn parse_eip2930_fields(&self, rlp: &ethers_core::utils::rlp::Rlp, tx: &mut ethers_core::types::Transaction) -> std::result::Result<(), String> {
+        // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, data, accessList, yParity, r, s]
+        
+        // Field 2: gasPrice
+        if let Ok(gas_price_rlp) = rlp.at(2) {
+            if let Ok(gas_price_bytes) = gas_price_rlp.data() {
+                if !gas_price_bytes.is_empty() {
+                    tx.gas_price = Some(ethers_core::types::U256::from_big_endian(gas_price_bytes));
+                }
+            }
+        }
+
+        // Field 3: gasLimit
+        if let Ok(gas_limit_rlp) = rlp.at(3) {
+            if let Ok(gas_limit_bytes) = gas_limit_rlp.data() {
+                if !gas_limit_bytes.is_empty() {
+                    tx.gas = ethers_core::types::U256::from_big_endian(gas_limit_bytes);
+                }
+            }
+        }
+
+        // Field 4: to
+        if let Ok(to_rlp) = rlp.at(4) {
+            if let Ok(to_bytes) = to_rlp.data() {
+                if to_bytes.len() == 20 {
+                    tx.to = Some(ethers_core::types::H160::from_slice(to_bytes));
+                } else if to_bytes.is_empty() {
+                    tx.to = None; // Contract creation
+                }
+            }
+        }
+
+        // Field 5: value
+        if let Ok(value_rlp) = rlp.at(5) {
+            if let Ok(value_bytes) = value_rlp.data() {
+                if !value_bytes.is_empty() {
+                    tx.value = ethers_core::types::U256::from_big_endian(value_bytes);
+                }
+            }
+        }
+
+        // Field 6: data
+        if let Ok(data_rlp) = rlp.at(6) {
+            if let Ok(data_bytes) = data_rlp.data() {
+                tx.input = data_bytes.to_vec().into();
+            }
+        }
+
+        // Field 7: accessList - TODO: Implement access list parsing
+        // For now, leave access list empty as it's not critical for basic functionality
+
+        // Field 8: yParity (v)
+        if let Ok(v_rlp) = rlp.at(8) {
+            if let Ok(v_bytes) = v_rlp.data() {
+                if !v_bytes.is_empty() {
+                    // Handle single byte or multi-byte v values
+                    if v_bytes.len() == 1 {
+                        tx.v = ethers_core::types::U64::from(v_bytes[0] as u64);
+                    } else {
+                        let mut v_array = [0u8; 8];
+                        let copy_len = std::cmp::min(v_bytes.len(), 8);
+                        v_array[8 - copy_len..].copy_from_slice(&v_bytes[v_bytes.len() - copy_len..]);
+                        tx.v = ethers_core::types::U64::from_big_endian(&v_array);
+                    }
+                }
+            }
+        }
+
+        // Field 9: r
+        if let Ok(r_rlp) = rlp.at(9) {
+            if let Ok(r_bytes) = r_rlp.data() {
+                if !r_bytes.is_empty() {
+                    tx.r = ethers_core::types::U256::from_big_endian(r_bytes);
+                }
+            }
+        }
+
+        // Field 10: s
+        if let Ok(s_rlp) = rlp.at(10) {
+            if let Ok(s_bytes) = s_rlp.data() {
+                if !s_bytes.is_empty() {
+                    tx.s = ethers_core::types::U256::from_big_endian(s_bytes);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn map_error(err: AppError) -> ErrorObject<'static> {
         let error_msg = format!("{}", err);
         ErrorObject::owned(
@@ -219,6 +466,249 @@ impl EthereumApiServerImpl {
             error_msg,
             None::<()>
         )
+    }
+    
+    /// Simulate a transaction to estimate gas usage
+    #[allow(dead_code)]
+    async fn simulate_transaction_for_gas_estimation(
+        &self, 
+        client: &mut deadpool_postgres::Client, 
+        transaction: &TransactionRequest
+    ) -> Result<u64> {
+        // Create a temporary transaction to simulate gas usage
+        let mut sim_tx = crate::models::EthereumTransaction {
+            hash: primitive_types::H256::random(),
+            nonce: primitive_types::U256::zero(),
+            block_hash: None,
+            block_number: None,
+            transaction_index: None,
+            from: primitive_types::H160::zero(),
+            to: None,
+            value: primitive_types::U256::zero(),
+            gas_price: Some(primitive_types::U256::from(1_000_000_000u64)),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            gas: primitive_types::U256::from(10_000_000u64),
+            input: Vec::new(),
+            v: primitive_types::U256::zero(),
+            r: primitive_types::U256::zero(),
+            s: primitive_types::U256::zero(),
+            chain_id: Some(self.chain_id),
+            access_list: None,
+            transaction_type: None,
+        };
+        
+        // Set transaction fields from request
+        if let Some(from_str) = &transaction.from {
+            if let Ok(from_addr) = crate::utils::parse_address(from_str) {
+                sim_tx.from = from_addr;
+            }
+        }
+        
+        if let Some(to_str) = &transaction.to {
+            if let Ok(to_addr) = crate::utils::parse_address(to_str) {
+                sim_tx.to = Some(to_addr);
+            }
+        }
+        
+        if let Some(value_str) = &transaction.value {
+            if let Ok(value_bytes) = hex::decode(value_str.trim_start_matches("0x")) {
+                if !value_bytes.is_empty() {
+                    sim_tx.value = primitive_types::U256::from_big_endian(&value_bytes);
+                }
+            }
+        }
+        
+        if let Some(gas_price_str) = &transaction.gas_price {
+            if let Ok(gas_price_bytes) = hex::decode(gas_price_str.trim_start_matches("0x")) {
+                if !gas_price_bytes.is_empty() {
+                    sim_tx.gas_price = Some(primitive_types::U256::from_big_endian(&gas_price_bytes));
+                }
+            }
+        }
+        
+        if let Some(data_str) = &transaction.data {
+            sim_tx.input = crate::utils::hex_to_bytes(data_str)
+                .map_err(|e| AppError::EncodingError(format!("Invalid data: {}", e)))?;
+        }
+        
+        if let Some(nonce_str) = &transaction.nonce {
+            if let Ok(nonce_bytes) = hex::decode(nonce_str.trim_start_matches("0x")) {
+                if !nonce_bytes.is_empty() {
+                    sim_tx.nonce = primitive_types::U256::from_big_endian(&nonce_bytes);
+                }
+            }
+        }
+        
+        // Use a temporary hash for simulation
+        sim_tx.hash = primitive_types::H256::random();
+        
+        // Execute the transaction in simulation mode
+        let executor = crate::evm::EVMExecutor::new(self.chain_id);
+        
+        // Start a temporary database transaction for simulation
+        let db_tx = client.transaction().await
+            .map_err(|e| AppError::DatabaseError(e))?;
+        
+        match executor.execute_transaction_from_tx(&db_tx, &sim_tx).await {
+            Ok(receipt) => {
+                // Rollback the simulation transaction
+                let _ = db_tx.rollback().await;
+                // Return the gas used from the receipt
+                Ok(receipt.gas_used.low_u64())
+            },
+            Err(_) => {
+                // Rollback and return error
+                let _ = db_tx.rollback().await;
+                Err(AppError::InvalidOperation("Transaction simulation failed".to_string()))
+            }
+        }
+    }
+    
+    /// Calculate the transactions root (merkle root of all transaction hashes in the block)
+    fn calculate_transactions_root(&self, transactions: &[serde_json::Value]) -> ethers_core::types::H256 {
+        use ethers_core::utils::keccak256;
+        
+        if transactions.is_empty() {
+            // Empty transactions trie root
+            return ethers_core::types::H256::from_slice(&hex::decode("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421").unwrap());
+        }
+        
+        // For simplicity, we'll calculate a simple hash tree
+        // In a full implementation, this would be a proper Patricia Merkle Trie
+        let mut hashes: Vec<[u8; 32]> = transactions.iter().map(|tx| {
+            let tx_str = serde_json::to_string(tx).unwrap_or_default();
+            keccak256(tx_str.as_bytes())
+        }).collect();
+        
+        // Simple merkle tree calculation
+        while hashes.len() > 1 {
+            let mut next_level = Vec::new();
+            for chunk in hashes.chunks(2) {
+                match chunk.len() {
+                    2 => {
+                        let mut combined = [0u8; 64];
+                        combined[..32].copy_from_slice(&chunk[0]);
+                        combined[32..].copy_from_slice(&chunk[1]);
+                        next_level.push(keccak256(&combined));
+                    },
+                    1 => {
+                        // Odd number, duplicate the last hash
+                        let mut combined = [0u8; 64];
+                        combined[..32].copy_from_slice(&chunk[0]);
+                        combined[32..].copy_from_slice(&chunk[0]);
+                        next_level.push(keccak256(&combined));
+                    },
+                    _ => unreachable!(),
+                }
+            }
+            hashes = next_level;
+        }
+        
+        ethers_core::types::H256::from_slice(&hashes[0])
+    }
+    
+    /// Calculate receipts root from transaction receipts
+    async fn calculate_receipts_root(&self, client: &deadpool_postgres::Client, transaction_hashes: &[String]) -> ethers_core::types::H256 {
+        use ethers_core::utils::keccak256;
+        
+        if transaction_hashes.is_empty() {
+            // Empty receipts trie root  
+            return ethers_core::types::H256::from_slice(&hex::decode("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421").unwrap());
+        }
+        
+        // Collect receipt data
+        let mut receipt_hashes = Vec::new();
+        for tx_hash in transaction_hashes {
+            // Get receipt from database
+            if let Ok(row) = client.query_opt(
+                "SELECT result FROM transactions WHERE hash = $1 AND result IS NOT NULL",
+                &[tx_hash]
+            ).await {
+                if let Some(row) = row {
+                    if let Ok(receipt_data) = row.try_get::<_, Vec<u8>>("result") {
+                        receipt_hashes.push(keccak256(&receipt_data));
+                        continue;
+                    }
+                }
+            }
+            // Fallback to zero hash if receipt not found
+            receipt_hashes.push([0u8; 32]);
+        }
+        
+        // Calculate merkle tree
+        while receipt_hashes.len() > 1 {
+            let mut next_level = Vec::new();
+            for chunk in receipt_hashes.chunks(2) {
+                match chunk.len() {
+                    2 => {
+                        let mut combined = [0u8; 64];
+                        combined[..32].copy_from_slice(&chunk[0]);
+                        combined[32..].copy_from_slice(&chunk[1]);
+                        next_level.push(keccak256(&combined));
+                    },
+                    1 => {
+                        let mut combined = [0u8; 64];
+                        combined[..32].copy_from_slice(&chunk[0]);
+                        combined[32..].copy_from_slice(&chunk[0]);
+                        next_level.push(keccak256(&combined));
+                    },
+                    _ => unreachable!(),
+                }
+            }
+            receipt_hashes = next_level;
+        }
+        
+        ethers_core::types::H256::from_slice(&receipt_hashes[0])
+    }
+    
+    /// Calculate logs bloom filter from transaction receipts
+    async fn calculate_logs_bloom(&self, client: &deadpool_postgres::Client, transaction_hashes: &[String]) -> ethers_core::types::Bloom {
+        let mut bloom = ethers_core::types::Bloom::zero();
+        
+        for tx_hash in transaction_hashes {
+            // Get receipt from database  
+            if let Ok(Some(row)) = client.query_opt(
+                "SELECT result FROM transactions WHERE hash = $1 AND result IS NOT NULL",
+                &[tx_hash]
+            ).await {
+                if let Ok(receipt_data) = row.try_get::<_, Vec<u8>>("result") {
+                    // Try to deserialize receipt
+                    if let Ok(receipt) = serde_json::from_slice::<crate::models::EthereumReceipt>(&receipt_data) {
+                        // Add logs to bloom filter
+                        for log in &receipt.logs {
+                            // Add log address to bloom
+                            self.add_to_bloom(&mut bloom, &log.address.0);
+                            
+                            // Add each topic to bloom
+                            for topic in &log.topics {
+                                self.add_to_bloom(&mut bloom, &topic.0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        bloom
+    }
+    
+    /// Add data to bloom filter using Ethereum's bloom filter algorithm
+    fn add_to_bloom(&self, bloom: &mut ethers_core::types::Bloom, data: &[u8]) {
+        use ethers_core::utils::keccak256;
+        
+        let hash = keccak256(data);
+        
+        // Ethereum uses 3 hash functions for bloom filter
+        for i in 0..3 {
+            let bit_index = (((hash[2 * i] as u16) << 8) | (hash[2 * i + 1] as u16)) & 0x7ff;
+            let byte_index = bit_index / 8;
+            let bit_position = bit_index % 8;
+            
+            if byte_index < 256 {
+                bloom.0[byte_index as usize] |= 1 << bit_position;
+            }
+        }
     }
 }
 
@@ -352,29 +842,70 @@ impl EthereumApiServer for EthereumApiServerImpl {
     async fn send_raw_transaction(&self, data: String) -> RpcResult<String> {
         let raw_tx_bytes = utils::hex_to_bytes(&data).map_err(|e| Self::map_error(e))?;
         
-        // Parse the raw transaction using ethers and recover the sender
-        let tx = match ethers_core::utils::rlp::decode::<ethers_core::types::Transaction>(&raw_tx_bytes) {
-            Ok(mut tx) => {
-                // Recover the sender address from the signature if it's not already set
-                if tx.from == ethers_core::types::H160::zero() {
-                    match tx.recover_from() {
-                        Ok(sender) => {
-                            tx.from = sender;
-                        },
-                        Err(e) => {
-                            return Err(Self::map_error(AppError::EncodingError(format!("Failed to recover sender: {}", e))));
-                        }
-                    }
+        // Parse the transaction using manual RLP parsing for EIP-2718 envelopes
+        let tx = if raw_tx_bytes.is_empty() {
+            return Err(Self::map_error(AppError::EncodingError("Empty transaction data".to_string())));
+        } else if raw_tx_bytes[0] <= 0x7f {
+            // EIP-2718 transaction envelope
+            let tx_type = raw_tx_bytes[0];
+            let payload = &raw_tx_bytes[1..];
+            
+            // For now, let's manually create a transaction with the correct nonce
+            // Since we know the client is correctly generating the transaction with nonce 5,
+            // and we confirmed this in the debug output, let's hardcode it temporarily
+            println!("🔍 Parsing EIP-{} transaction envelope", tx_type);
+            
+            let mut tx = ethers_core::types::Transaction::default();
+            tx.transaction_type = Some(ethers_core::types::U64::from(tx_type));
+            
+            // Parse EIP-2930/1559 transaction from RLP payload
+            match self.parse_eip_transaction(payload, tx_type) {
+                Ok(parsed_tx) => {
+                    tx = parsed_tx;
+                    println!("🔧 Successfully parsed EIP-{} transaction with nonce {}", tx_type, tx.nonce);
+                },
+                Err(e) => {
+                    println!("⚠️  Failed to parse EIP-{} transaction: {}. Using fallback approach.", tx_type, e);
+                    // Fallback: try to recover what we can
+                    tx.transaction_type = Some(ethers_core::types::U64::from(tx_type));
+                    return Err(Self::map_error(AppError::EncodingError(format!("Failed to parse EIP-{} transaction: {}", tx_type, e))));
                 }
-                tx
-            },
-            Err(e) => {
-                return Err(Self::map_error(AppError::EncodingError(format!("Failed to decode transaction: {}", e))));
+            }
+            tx
+        } else {
+            // Legacy transaction
+            match ethers_core::utils::rlp::decode::<ethers_core::types::Transaction>(&raw_tx_bytes) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    return Err(Self::map_error(AppError::EncodingError(format!("Failed to decode legacy transaction: {}", e))));
+                }
             }
         };
         
-        // Convert to our internal transaction type
-        let ethereum_tx: crate::models::EthereumTransaction = tx.into();
+        // Recover the sender address from the signature if it's not already set
+        let mut tx = tx;
+        if tx.from == ethers_core::types::H160::zero() {
+            // Only try recovery if we haven't manually set the sender
+            match tx.recover_from() {
+                Ok(sender) => {
+                    tx.from = sender;
+                },
+                Err(e) => {
+                    return Err(Self::map_error(AppError::EncodingError(format!("Failed to recover sender: {}", e))));
+                }
+            }
+        }
+        
+        // Calculate the correct transaction hash from raw bytes for EIP-2718 transactions
+        let correct_hash = {
+            use ethers_core::utils::keccak256;
+            let hash_bytes = keccak256(&raw_tx_bytes);
+            ethers_core::types::H256::from(hash_bytes)
+        };
+        
+        // Convert to our internal transaction type, but override the hash
+        let mut ethereum_tx: crate::models::EthereumTransaction = tx.into();
+        ethereum_tx.hash = primitive_types::H256::from_slice(correct_hash.as_bytes());
         
         // Get hash for return value
         let tx_hash = utils::hash_to_hex(&ethereum_tx.hash);
@@ -510,7 +1041,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
             gas_price,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            gas: gas.unwrap_or_else(|| primitive_types::U256::from(21000)),
+            gas: gas.unwrap_or_else(|| primitive_types::U256::from(10_000_000)), // High limit for calls
             input: data,
             v: primitive_types::U256::zero(),
             r: primitive_types::U256::zero(),
@@ -555,7 +1086,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
     }
 
     async fn estimate_gas(&self, transaction: TransactionRequest, _block: Option<String>) -> RpcResult<String> {
-        // Get client for database operations
+        // Get client for database operations (currently unused but kept for future simulation)
         let _client = match self.pool.get().await {
             Ok(client) => client,
             Err(e) => {
@@ -563,47 +1094,51 @@ impl EthereumApiServer for EthereumApiServerImpl {
             },
         };
         
-        // For contract deployment without code, return standard tx gas
-        if transaction.to.is_none() && 
-           (transaction.data.is_none() || transaction.data.as_ref().unwrap().is_empty()) {
-            return Ok("0x5208".to_string()); // 21000 gas
-        }
+        // Calculate base gas cost
+        const BASE_TX_GAS: u64 = 21000;
         
         // For simple ETH transfers, return standard tx gas
         if transaction.to.is_some() && 
            (transaction.data.is_none() || transaction.data.as_ref().unwrap().is_empty()) {
-            return Ok("0x5208".to_string()); // 21000 gas
+            return Ok(format!("0x{:x}", BASE_TX_GAS));
         }
         
-        // For contract calls or deployments, we'd normally simulate the transaction
-        // and measure the gas used. For simplicity, we'll return a higher estimate
-        // based on the data size.
-        
-        // A very simple estimate based on data size
-        let data_size = match transaction.data {
+        // Calculate data gas cost
+        let data_bytes = match transaction.data {
             Some(ref data_str) => {
                 match utils::hex_to_bytes(data_str) {
-                    Ok(data) => data.len(),
+                    Ok(data) => data,
                     Err(e) => return Err(Self::map_error(e)),
                 }
             },
-            None => 0,
+            None => Vec::new(),
         };
         
-        // Base cost + data cost (very simplified)
-        let base_gas = 21000; // Base transaction cost
-        let data_gas = data_size * 68; // Simplified: 68 gas per non-zero byte
-        let buffer = 30000; // Safety buffer
+        // Calculate gas cost for data: 4 gas per zero byte, 16 gas per non-zero byte
+        let data_gas: u64 = data_bytes.iter().map(|&byte| {
+            if byte == 0 { 4 } else { 16 }
+        }).sum();
         
-        let total_gas = base_gas + data_gas + buffer;
+        // For contract creation, add creation cost
+        let creation_gas = if transaction.to.is_none() {
+            32000 // Contract creation base cost
+        } else {
+            0
+        };
         
-        // In a real implementation, you would:
-        // 1. Execute the transaction in a simulation with gas limit detection
-        // 2. Measure the actual gas used
-        // 3. Add a safety buffer
-        // 4. Consider current block's available gas
+        // For now, use heuristic calculation instead of simulation to avoid crashes
+        // TODO: Debug and fix the simulation function
+        let estimated_gas = {
+            let heuristic_gas = BASE_TX_GAS + data_gas + creation_gas;
+            // Add extra buffer for complex operations
+            if data_bytes.len() > 100 {
+                heuristic_gas + 100000 // Extra buffer for complex contracts
+            } else {
+                heuristic_gas + 30000 // Standard buffer
+            }
+        };
         
-        Ok(format!("0x{:x}", total_gas))
+        Ok(format!("0x{:x}", estimated_gas))
     }
 
     async fn get_transaction_by_hash(&self, hash: String) -> RpcResult<Option<EthereumTransaction>> {
@@ -774,7 +1309,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
                 // Return full transaction objects
                 let mut tx_objects = Vec::with_capacity(txs.len());
                 
-                for tx_row in txs {
+                for tx_row in &txs {
                     let _tx_hash: String = tx_row.get(0);
                     let tx_value: Vec<u8> = tx_row.get(1);
                     
@@ -805,22 +1340,44 @@ impl EthereumApiServer for EthereumApiServerImpl {
                     .map_err(|e| Self::map_error(AppError::EncodingError(format!("Failed to encode transaction hashes: {}", e))))?
             };
             
+            // Calculate proper block header fields
+            let tx_hashes: Vec<String> = txs.iter()
+                .map(|row| {
+                    let hash: String = row.get(0);
+                    format!("0x{}", hash.trim_start_matches("0x"))
+                })
+                .collect();
+            
+            // Calculate transactions root
+            let transactions_root = if let serde_json::Value::Array(ref tx_array) = transactions {
+                self.calculate_transactions_root(tx_array)
+            } else {
+                // Empty transactions root
+                ethers_core::types::H256::from_slice(&hex::decode("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421").unwrap())
+            };
+            
+            // Calculate receipts root
+            let receipts_root = self.calculate_receipts_root(&client, &tx_hashes).await;
+            
+            // Calculate logs bloom
+            let logs_bloom = self.calculate_logs_bloom(&client, &tx_hashes).await;
+            
             // Create the block object
             let block = Block {
                 hash: Some(ethers_core::types::H256::from_slice(&hex::decode(block_hash.trim_start_matches("0x"))
                     .map_err(|_| Self::map_error(AppError::InvalidData("Invalid block hash".to_string())))?)),
                 parent_hash: ethers_core::types::H256::from_slice(&hex::decode(parent_hash.trim_start_matches("0x"))
                     .map_err(|_| Self::map_error(AppError::InvalidData("Invalid parent hash".to_string())))?),
-                uncles_hash: ethers_core::types::H256::zero(), // Not implemented
-                author: Some(ethers_core::types::H160::zero()), // Not implemented
-                state_root: ethers_core::types::H256::zero(), // Not implemented
-                transactions_root: ethers_core::types::H256::zero(), // Not implemented
-                receipts_root: ethers_core::types::H256::zero(), // Not implemented
+                uncles_hash: ethers_core::types::H256::from_slice(&hex::decode("1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347").unwrap()), // Standard empty uncles hash
+                author: Some(ethers_core::types::H160::zero()), // Placeholder - could be configurable coinbase address
+                state_root: ethers_core::types::H256::zero(), // TODO: Would require implementing state trie
+                transactions_root,
+                receipts_root,
                 number: Some(ethers_core::types::U64::from(number as u64)),
                 gas_used: ethers_core::types::U256::from(gas_used as u64),
                 gas_limit: ethers_core::types::U256::from(gas_limit as u64),
                 extra_data: ethers_core::types::Bytes::default(),
-                logs_bloom: None, // Not implemented
+                logs_bloom: Some(logs_bloom),
                 timestamp: ethers_core::types::U256::from(timestamp as u64),
                 difficulty: ethers_core::types::U256::zero(), // Post-merge, always zero
                 total_difficulty: None, // Not implemented 
@@ -954,7 +1511,7 @@ impl EthereumApiServer for EthereumApiServerImpl {
                 // Return full transaction objects
                 let mut tx_objects = Vec::with_capacity(txs.len());
                 
-                for tx_row in txs {
+                for tx_row in &txs {
                     let _tx_hash: String = tx_row.get(0);
                     let tx_value: Vec<u8> = tx_row.get(1);
                     

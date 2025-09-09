@@ -1,13 +1,16 @@
 use deadpool_postgres::{Client, Transaction};
 use primitive_types::{H160, H256, U256};
-use revm::db::Database;
-use revm::primitives::{
-    AccountInfo, Address, Bytecode, HashMap, U256 as revmU256, B256, KECCAK_EMPTY,
+use revm_database::Database;
+use revm_primitives::{
+    Address, HashMap, U256 as revmU256, B256, KECCAK_EMPTY,
+    Bytes as revmBytes,
 };
+// AccountInfo and Bytecode are in revm-state in REVM 29.0.0
+use revm_state::{AccountInfo, Bytecode};
+// Add AccountInfo and Bytecode to the revm_primitives import above
 use std::str::FromStr;
-use revm::primitives::Bytes as revmBytes;
 
-use crate::errors::{AppError, Result};
+use crate::errors::{AppError, Result, DatabaseError};
 use crate::models::Account;
 
 // Define an enum to handle both Client and Transaction types
@@ -404,10 +407,10 @@ impl<'a> PostgresStateStorage<'a> {
 // Implementation of the revm Database trait for PostgresStateStorage
 // This bridges the gap between the EVM execution and the PostgreSQL state storage
 impl<'a> Database for PostgresStateStorage<'a> {
-    type Error = AppError;
+    type Error = DatabaseError;
 
     // Get basic account information
-    fn basic(&mut self, address: Address) -> std::result::Result<Option<AccountInfo>, Self::Error> {
+    fn basic(&mut self, address: Address) -> std::result::Result<Option<AccountInfo>, DatabaseError> {
         // Convert to H160 for our storage
         let h160_address = self.to_primitive_address(&address);
         println!("🔍 REVM querying basic info for address: {}", h160_address);
@@ -459,18 +462,30 @@ impl<'a> Database for PostgresStateStorage<'a> {
                         Ok(Some(account_info))
                     },
                     None => {
-                        // Account doesn't exist
-                        println!("❌ Account {} not found in database", h160_address);
-                        Ok(None)
+                        // Account doesn't exist - return empty account
+                        println!("❌ Account {} not found in database, creating empty account", h160_address);
+                        
+                        // Create an empty account with proper defaults for contract creation
+                        let empty_account = AccountInfo {
+                            balance: revmU256::ZERO,
+                            nonce: 0,
+                            code_hash: KECCAK_EMPTY,
+                            code: None,
+                        };
+                        
+                        // For contract creation, we should not cache the empty account
+                        // as REVM will modify it during creation
+                        println!("📝 Created empty account for {}", h160_address);
+                        Ok(Some(empty_account))
                     }
                 }
             },
-            Err(e) => Err(e),
+            Err(e) => Err(DatabaseError::from(e.to_string())),
         }
     }
 
     // Get storage slot value
-    fn storage(&mut self, address: Address, index: revmU256) -> std::result::Result<revmU256, Self::Error> {
+    fn storage(&mut self, address: Address, index: revmU256) -> std::result::Result<revmU256, DatabaseError> {
         // Convert to H160 for our storage
         let h160_address = self.to_primitive_address(&address);
         
@@ -503,16 +518,19 @@ impl<'a> Database for PostgresStateStorage<'a> {
                 // Convert H256 to revmU256
                 Ok(self.h256_to_revm_u256(&value))
             },
-            Err(e) => Err(e),
+            Err(e) => Err(DatabaseError::from(e.to_string())),
         }
     }
 
     // Get bytecode by hash
-    fn code_by_hash(&mut self, code_hash: B256) -> std::result::Result<Bytecode, Self::Error> {
+    fn code_by_hash(&mut self, code_hash: B256) -> std::result::Result<Bytecode, DatabaseError> {
         // Convert to H256 for our storage
         let h256_code_hash = self.to_primitive_h256(&code_hash);
         
-        // Check cache TODO: Use bytecode_cache
+        // Check cache first
+        if let Some(cached_bytecode) = self._bytecode_cache.get(&h256_code_hash) {
+            return Ok(cached_bytecode.clone());
+        }
         
         // Go to database
         let connection = self.connection.clone();
@@ -529,17 +547,18 @@ impl<'a> Database for PostgresStateStorage<'a> {
         
         match result {
             Ok(bytecode) => {
-                // We could cache the result
+                // Cache the result for future use
+                self._bytecode_cache.insert(h256_code_hash, bytecode.clone());
                 Ok(bytecode)
             },
-            Err(e) => Err(e),
+            Err(e) => Err(DatabaseError::from(e.to_string())),
         }
     }
 
     // Get a block hash by number
-    fn block_hash(&mut self, number: revmU256) -> std::result::Result<B256, Self::Error> {
-        // Convert to u64 for our database query
-        let block_number = number.to::<u64>();
+    fn block_hash(&mut self, number: u64) -> std::result::Result<B256, DatabaseError> {
+        // Use the provided u64 directly
+        let block_number = number;
         
         let connection = self.connection.clone();
         let result = tokio::task::block_in_place(|| {
@@ -558,7 +577,7 @@ impl<'a> Database for PostgresStateStorage<'a> {
                 // Convert from H256 to B256
                 Ok(self.to_revm_b256(&hash))
             },
-            Err(e) => Err(e),
+            Err(e) => Err(DatabaseError::from(e.to_string())),
         }
     }
 }

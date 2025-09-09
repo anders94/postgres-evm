@@ -169,7 +169,11 @@ impl From<Transaction> for EthereumTransaction {
 
         Self {
             hash: H256::from_slice(tx.hash.as_bytes()),
-            nonce: eth_to_prim_u256(tx.nonce),
+            nonce: {
+                let converted_nonce = eth_to_prim_u256(tx.nonce);
+                println!("🔧 Converting transaction nonce: ethers {} -> primitive {}", tx.nonce, converted_nonce);
+                converted_nonce
+            },
             block_hash: to_h256(tx.block_hash),
             block_number: tx.block_number.map(|bn| {
                 let eth_u256 = EthU256::from(bn.as_u64());

@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-revm = { version = "3.3.0", features = ["std", "serde"] }
+revm = { version = "29.0.0", features = ["std", "serde"] }
+revm-database = "7.0.5"
+revm-primitives = "20.2.1"
+revm-state = "7.0.5"
 jsonrpsee = { version = "0.18.2", features = ["server", "macros"] }
 tokio = { version = "1.29.1", features = ["full"] }
 tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }

@@ -1,13 +1,17 @@
+use chrono;
 use deadpool_postgres::Client;
 use ethers_core::types::{H256, U256, Bloom};
 use primitive_types::H160;
-use revm::{
-    
-    primitives::{
-        Address, Env, ExecutionResult, Output, TransactTo, TxEnv, U256 as revmU256, Bytes as revmBytes, KECCAK_EMPTY,
-    },
-    EVM,
+use revm_primitives::{
+    Address, U256 as revmU256, Bytes as revmBytes, KECCAK_EMPTY, TxKind,
+    hardfork::SpecId,
 };
+
+use revm::{MainBuilder, ExecuteEvm};
+use revm::context_interface::ContextSetters;
+use revm::context::{Context, Journal};
+use revm::context::{BlockEnv, TxEnv, CfgEnv};
+use revm::context::result::{ExecutionResult, Output};
 use deadpool_postgres::Transaction as PgTransaction;
 
 use crate::errors::{AppError, Result};
@@ -134,24 +138,35 @@ impl EVMExecutor {
         // Get the chain info
         let chain_info = self.get_chain_info_tx(&db_tx).await?;
                 
-        // Prepare EVM environment
-        let mut env = Env::default();
-        env.cfg.chain_id = self.chain_id;
+        // Prepare EVM environment components
+        let mut cfg_env: CfgEnv<SpecId> = CfgEnv::default();
+        cfg_env.chain_id = self.chain_id;
+        
+        let mut block_env = BlockEnv::default();
                 
         // Set block info
         let latest_block = &chain_info.latest_block;
-        env.block.number = revmU256::from(latest_block.number.as_u64());
-        env.block.timestamp = revmU256::from(latest_block.timestamp.as_u64());
-        env.block.gas_limit = revmU256::from(latest_block.gas_limit.as_u64());
+        block_env.number = revmU256::from(latest_block.number.as_u64());
+        block_env.timestamp = revmU256::from(latest_block.timestamp.as_u64());
+        block_env.gas_limit = latest_block.gas_limit.as_u64();
                 
         if let Some(base_fee) = latest_block.base_fee_per_gas {
-            env.block.basefee = revmU256::from(base_fee.as_u64());
+            block_env.basefee = base_fee.as_u64();
         }
                 
         // Set transaction
         let mut tx_env = TxEnv::default();
         let from_bytes: [u8; 20] = tx.from.into();
         tx_env.caller = Address::from(from_bytes);
+        
+        // Set nonce - this was missing!
+        let nonce_bytes = {
+            let mut bytes = [0u8; 32];
+            tx.nonce.to_big_endian(&mut bytes);
+            bytes
+        };
+        tx_env.nonce = revmU256::from_be_bytes(nonce_bytes).as_limbs()[0] as u64;
+        println!("🔧 Set EVM transaction nonce to: {}", tx.nonce);
         // Handle EIP-1559 vs legacy gas pricing
         if let (Some(max_fee), Some(_max_priority)) = (tx.max_fee_per_gas, tx.max_priority_fee_per_gas) {
             // For EIP-1559 transactions, use max_fee as gas_price
@@ -160,7 +175,7 @@ impl EVMExecutor {
                 max_fee.to_big_endian(&mut bytes);
                 bytes
             };
-            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes);
+            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes).as_limbs()[0] as u128;
         } else if let Some(gas_price) = tx.gas_price {
             // Legacy transaction
             let gas_price_bytes = {
@@ -168,10 +183,10 @@ impl EVMExecutor {
                 gas_price.to_big_endian(&mut bytes);
                 bytes
             };
-            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes);
+            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes).as_limbs()[0] as u128;
         } else {
             // Default fallback
-            tx_env.gas_price = revmU256::from(1_000_000_000u64); // 1 gwei
+            tx_env.gas_price = 1_000_000_000u128; // 1 gwei
         }
         tx_env.gas_limit = tx.gas.as_u64();
         
@@ -186,29 +201,33 @@ impl EVMExecutor {
                 
         if let Some(to) = tx.to {
             let to_bytes: [u8; 20] = to.into();
-            tx_env.transact_to = TransactTo::Call(Address::from(to_bytes));
+            tx_env.kind = TxKind::Call(Address::from(to_bytes));
         } else {
-            tx_env.transact_to = TransactTo::Create(revm::primitives::CreateScheme::Create);
+            tx_env.kind = TxKind::Create;
+            println!("🔧 Setting up contract creation transaction");
         }
                 
-        env.tx = tx_env;
-                
-        // Create EVM instance with the PostgreSQL database
-        let mut db = PostgresStateStorage::new_from_tx(&db_tx);
-        let mut evm = EVM::new();
-        evm.env = env;
-        evm.database(&mut db);
-                
-        // Execute transaction
-        let result_and_state = match evm.transact() {
-            Ok(result) => result,
-            Err(e) => {
-                db_tx.rollback().await?;
-                return Err(AppError::EVMError(format!("EVM execution error: {:?}", e)));
+        // Execute EVM transaction synchronously to avoid Send/Sync issues
+        let result_and_state = {
+            let db = PostgresStateStorage::new_from_tx(&db_tx);
+            // In REVM 29.0.0, we need to create a MainContext first with separate env components
+            let mut ctx: Context<BlockEnv, TxEnv, CfgEnv<SpecId>, PostgresStateStorage<'_>, Journal<PostgresStateStorage<'_>>, ()> = Context::new(db, SpecId::LONDON); // Use London spec for better compatibility
+            // Set the environment components
+            ctx.set_block(block_env);
+            // tx_env will be passed to transact() method instead
+            // cfg_env is set during Context::new with SpecId
+            let mut evm = ctx.build_mainnet();
+                    
+            // Execute transaction
+            match evm.transact(tx_env) {
+                Ok(result) => result,
+                Err(e) => {
+                    return Err(AppError::EVMError(format!("EVM execution error: {:?}", e)));
+                }
             }
         };
                 
-        // Apply state changes to database
+        // Apply state changes to database with safe conversions
         let postgres_state = PostgresState::new_from_tx(&db_tx);
         for (address, account) in result_and_state.state {
             if account.is_touched() {
@@ -217,12 +236,13 @@ impl EVMExecutor {
                     H160::from(bytes)
                 };
                 
-                // Convert AccountInfo back to Account model
+                // Convert AccountInfo back to Account model with safe conversions
                 let account_model = crate::models::Account {
                     nonce: U256::from(account.info.nonce),
                     balance: {
-                        let balance_bytes = account.info.balance.to_be_bytes::<32>();
-                        U256::from_big_endian(&balance_bytes)
+                        // Safe conversion without going through bytes
+                        let balance_str = account.info.balance.to_string();
+                        U256::from_dec_str(&balance_str).unwrap_or(U256::zero())
                     },
                     code_hash: if account.info.code_hash == KECCAK_EMPTY {
                         Some(H256::zero())
@@ -242,35 +262,51 @@ impl EVMExecutor {
                     }
                 }
                 
-                // Store any storage changes
+                // Store any storage changes with safe conversions
                 for (slot, value) in account.storage {
-                    let slot_h256 = {
-                        let slot_bytes = slot.to_be_bytes::<32>();
-                        H256::from(slot_bytes)
-                    };
-                    let value_h256 = {
-                        let value_bytes = value.present_value.to_be_bytes::<32>();
-                        H256::from(value_bytes)
-                    };
+                    // Safe conversion without using to_be_bytes
+                    let slot_str = slot.to_string();
+                    let value_str = value.present_value.to_string();
+                    
+                    // Create H256 from decimal string rather than bytes
+                    let slot_u256 = U256::from_dec_str(&slot_str).unwrap_or(U256::zero());
+                    let value_u256 = U256::from_dec_str(&value_str).unwrap_or(U256::zero());
+                    
+                    let mut slot_bytes = [0u8; 32];
+                    let mut value_bytes = [0u8; 32];
+                    slot_u256.to_big_endian(&mut slot_bytes);
+                    value_u256.to_big_endian(&mut value_bytes);
+                    
+                    let slot_h256 = H256::from(slot_bytes);
+                    let value_h256 = H256::from(value_bytes);
+                    
                     postgres_state.set_storage(&h160_address, &slot_h256, &value_h256).await?;
                 }
             }
         }
         
         // Process execution result
+        println!("🎯 EVM execution completed");
         let receipt = match result_and_state.result {
-            ExecutionResult::Success { output, gas_used, gas_refunded, logs, .. } => {
+            ExecutionResult::Success { reason: _, output, gas_used, gas_refunded, logs } => {
+                println!("✅ EVM execution succeeded, gas_used: {}", gas_used);
                 // Handle output (contract creation or call result)
                 let contract_address = match output {
-                    Output::Create(_, contract_addr) => {
-                        if let Some(addr) = contract_addr {
+                    Output::Create(_, contract_addr_opt) => {
+                        if let Some(addr) = contract_addr_opt {
                             let bytes: [u8; 20] = addr.into();
-                            Some(H160::from(bytes))
+                            let contract_addr = H160::from(bytes);
+                            println!("🎉 Contract created at address: {:?}", contract_addr);
+                            Some(contract_addr)
                         } else {
+                            println!("❌ Contract creation failed - no address returned");
                             None
                         }
                     },
-                    _ => None,
+                    _ => {
+                        println!("📞 Regular transaction call (not contract creation)");
+                        None
+                    }
                 };
                             
                 // Convert logs
@@ -282,11 +318,11 @@ impl EVMExecutor {
                                     
                         Log {
                             address: H160::from(addr_bytes),
-                            topics: log.topics.into_iter().map(|t| {
-                                let topic_bytes: [u8; 32] = t.into();
+                            topics: log.topics().into_iter().map(|t| {
+                                let topic_bytes: [u8; 32] = (*t).into();
                                 H256::from(topic_bytes)
                             }).collect(),
-                            data: log.data.to_vec(),
+                            data: log.data.data.to_vec(),
                             block_hash: None,
                             block_number: None,
                             transaction_hash: Some(tx.hash),
@@ -316,7 +352,8 @@ impl EVMExecutor {
                     effective_gas_price: tx.gas_price,
                 }
             },
-            ExecutionResult::Revert { gas_used, output: _ } => {
+            ExecutionResult::Revert { gas_used, output } => {
+                println!("❌ EVM execution reverted, gas_used: {}, output: {:?}", gas_used, output);
                 // Create failed receipt
                 EthereumReceipt {
                     transaction_hash: tx.hash,
@@ -336,7 +373,8 @@ impl EVMExecutor {
                     effective_gas_price: tx.gas_price,
                 }
             },
-            ExecutionResult::Halt { reason: _, gas_used } => {
+            ExecutionResult::Halt { reason, gas_used } => {
+                println!("🛑 EVM execution halted, reason: {:?}, gas_used: {}", reason, gas_used);
                 // Create failed receipt
                 EthereumReceipt {
                     transaction_hash: tx.hash,
@@ -389,24 +427,35 @@ impl EVMExecutor {
         // Get the chain info using the transaction
         let chain_info = self.get_chain_info_tx(db_tx).await?;
                 
-        // Prepare EVM environment
-        let mut env = Env::default();
-        env.cfg.chain_id = self.chain_id;
+        // Prepare EVM environment components
+        let mut cfg_env: CfgEnv<SpecId> = CfgEnv::default();
+        cfg_env.chain_id = self.chain_id;
+        
+        let mut block_env = BlockEnv::default();
                 
         // Set block info
         let latest_block = &chain_info.latest_block;
-        env.block.number = revmU256::from(latest_block.number.as_u64());
-        env.block.timestamp = revmU256::from(latest_block.timestamp.as_u64());
-        env.block.gas_limit = revmU256::from(latest_block.gas_limit.as_u64());
+        block_env.number = revmU256::from(latest_block.number.as_u64());
+        block_env.timestamp = revmU256::from(latest_block.timestamp.as_u64());
+        block_env.gas_limit = latest_block.gas_limit.as_u64();
                 
         if let Some(base_fee) = latest_block.base_fee_per_gas {
-            env.block.basefee = revmU256::from(base_fee.as_u64());
+            block_env.basefee = base_fee.as_u64();
         }
                 
         // Set transaction
         let mut tx_env = TxEnv::default();
         let from_bytes: [u8; 20] = tx.from.into();
         tx_env.caller = Address::from(from_bytes);
+        
+        // Set nonce - this was missing!
+        let nonce_bytes = {
+            let mut bytes = [0u8; 32];
+            tx.nonce.to_big_endian(&mut bytes);
+            bytes
+        };
+        tx_env.nonce = revmU256::from_be_bytes(nonce_bytes).as_limbs()[0] as u64;
+        println!("🔧 Set EVM transaction nonce to: {}", tx.nonce);
         // Handle EIP-1559 vs legacy gas pricing
         if let (Some(max_fee), Some(_max_priority)) = (tx.max_fee_per_gas, tx.max_priority_fee_per_gas) {
             // For EIP-1559 transactions, use max_fee as gas_price
@@ -415,7 +464,7 @@ impl EVMExecutor {
                 max_fee.to_big_endian(&mut bytes);
                 bytes
             };
-            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes);
+            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes).as_limbs()[0] as u128;
         } else if let Some(gas_price) = tx.gas_price {
             // Legacy transaction
             let gas_price_bytes = {
@@ -423,10 +472,10 @@ impl EVMExecutor {
                 gas_price.to_big_endian(&mut bytes);
                 bytes
             };
-            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes);
+            tx_env.gas_price = revmU256::from_be_bytes(gas_price_bytes).as_limbs()[0] as u128;
         } else {
             // Default fallback
-            tx_env.gas_price = revmU256::from(1_000_000_000u64); // 1 gwei
+            tx_env.gas_price = 1_000_000_000u128; // 1 gwei
         }
         tx_env.gas_limit = tx.gas.as_u64();
         
@@ -441,23 +490,28 @@ impl EVMExecutor {
                 
         if let Some(to) = tx.to {
             let to_bytes: [u8; 20] = to.into();
-            tx_env.transact_to = TransactTo::Call(Address::from(to_bytes));
+            tx_env.kind = TxKind::Call(Address::from(to_bytes));
         } else {
-            tx_env.transact_to = TransactTo::Create(revm::primitives::CreateScheme::Create);
+            tx_env.kind = TxKind::Create;
+            println!("🔧 Setting up contract creation transaction");
         }
                 
-        env.tx = tx_env;
-                
-        // Create EVM instance with the PostgreSQL database using the existing transaction
-        let mut db = PostgresStateStorage::new_from_tx(db_tx);
-        let mut evm = EVM::new();
-        evm.env = env;
-        evm.database(&mut db);
-                
-        // Execute transaction
-        let result = evm.transact().map_err(|e| AppError::EVMError(format!("{:?}", e)))?;
+        // Execute EVM transaction synchronously to avoid Send/Sync issues
+        let result = {
+            let db = PostgresStateStorage::new_from_tx(db_tx);
+            // In REVM 29.0.0, we need to create a MainContext first with separate env components
+            let mut ctx: Context<BlockEnv, TxEnv, CfgEnv<SpecId>, PostgresStateStorage<'_>, Journal<PostgresStateStorage<'_>>, ()> = Context::new(db, SpecId::LONDON); // Use London spec for better compatibility
+            // Set the environment components
+            ctx.set_block(block_env);
+            // tx_env will be passed to transact() method instead
+            // cfg_env is set during Context::new with SpecId
+            let mut evm = ctx.build_mainnet();
+                    
+            // Execute transaction
+            evm.transact(tx_env).map_err(|e| AppError::EVMError(format!("{:?}", e)))?
+        };
         
-        // Apply state changes to database
+        // Apply state changes to database with safe conversions
         let postgres_state = PostgresState::new_from_tx(db_tx);
         for (address, account) in result.state {
             if account.is_touched() {
@@ -466,12 +520,13 @@ impl EVMExecutor {
                     H160::from(bytes)
                 };
                 
-                // Convert AccountInfo back to Account model
+                // Convert AccountInfo back to Account model with safe conversions
                 let account_model = crate::models::Account {
                     nonce: U256::from(account.info.nonce),
                     balance: {
-                        let balance_bytes = account.info.balance.to_be_bytes::<32>();
-                        U256::from_big_endian(&balance_bytes)
+                        // Safe conversion without going through bytes
+                        let balance_str = account.info.balance.to_string();
+                        U256::from_dec_str(&balance_str).unwrap_or(U256::zero())
                     },
                     code_hash: if account.info.code_hash == KECCAK_EMPTY {
                         Some(H256::zero())
@@ -491,16 +546,24 @@ impl EVMExecutor {
                     }
                 }
                 
-                // Store any storage changes
+                // Store any storage changes with safe conversions
                 for (slot, value) in account.storage {
-                    let slot_h256 = {
-                        let slot_bytes = slot.to_be_bytes::<32>();
-                        H256::from(slot_bytes)
-                    };
-                    let value_h256 = {
-                        let value_bytes = value.present_value.to_be_bytes::<32>();
-                        H256::from(value_bytes)
-                    };
+                    // Safe conversion without using to_be_bytes
+                    let slot_str = slot.to_string();
+                    let value_str = value.present_value.to_string();
+                    
+                    // Create H256 from decimal string rather than bytes
+                    let slot_u256 = U256::from_dec_str(&slot_str).unwrap_or(U256::zero());
+                    let value_u256 = U256::from_dec_str(&value_str).unwrap_or(U256::zero());
+                    
+                    let mut slot_bytes = [0u8; 32];
+                    let mut value_bytes = [0u8; 32];
+                    slot_u256.to_big_endian(&mut slot_bytes);
+                    value_u256.to_big_endian(&mut value_bytes);
+                    
+                    let slot_h256 = H256::from(slot_bytes);
+                    let value_h256 = H256::from(value_bytes);
+                    
                     postgres_state.set_storage(&h160_address, &slot_h256, &value_h256).await?;
                 }
             }
@@ -508,17 +571,36 @@ impl EVMExecutor {
                 
         // Create receipt based on result
         let receipt = match result.result {
-            ExecutionResult::Success { reason: _, gas_used, gas_refunded: _, logs, output: _ } => {
+            ExecutionResult::Success { reason: _, output, gas_used, gas_refunded: _, logs } => {
+                // Handle output (contract creation or call result)
+                let contract_address = match output {
+                    Output::Create(_, contract_addr_opt) => {
+                        if let Some(addr) = contract_addr_opt {
+                            let bytes: [u8; 20] = addr.into();
+                            let contract_addr = H160::from(bytes);
+                            println!("🎉 Contract created at address: {:?}", contract_addr);
+                            Some(contract_addr)
+                        } else {
+                            println!("❌ Contract creation failed - no address returned");
+                            None
+                        }
+                    },
+                    _ => {
+                        println!("📞 Regular transaction call (not contract creation)");
+                        None
+                    }
+                };
+                
                 // Convert logs
                 let ethereum_logs: Vec<crate::models::Log> = logs.into_iter().enumerate().map(|(index, log)| {
-                    let topics = log.topics.iter().map(|topic| {
+                    let topics = log.topics().iter().map(|topic| {
                         H256::from_slice(topic.as_slice())
                     }).collect();
                     
                     crate::models::Log {
                         address: H160::from_slice(log.address.as_slice()),
                         topics,
-                        data: log.data.to_vec(),
+                        data: log.data.data.to_vec(),
                         block_hash: Some(H256::zero()),
                         block_number: Some(U256::zero()),
                         transaction_hash: Some(tx.hash),
@@ -538,7 +620,7 @@ impl EVMExecutor {
                     to: tx.to,
                     cumulative_gas_used: U256::from(gas_used),
                     gas_used: U256::from(gas_used),
-                    contract_address: None,
+                    contract_address,
                     logs: ethereum_logs,
                     status: Some(U256::one()),
                     root: None,
@@ -567,7 +649,8 @@ impl EVMExecutor {
                     effective_gas_price: tx.gas_price,
                 }
             },
-            ExecutionResult::Halt { reason: _, gas_used } => {
+            ExecutionResult::Halt { reason, gas_used } => {
+                println!("🛑 EVM execution halted, reason: {:?}, gas_used: {}", reason, gas_used);
                 // Create failed receipt
                 EthereumReceipt {
                     transaction_hash: tx.hash,

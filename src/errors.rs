@@ -37,3 +37,31 @@ pub enum AppError {
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
+
+// Add a simple error type for REVM Database trait
+// We need to implement DBErrorMarker manually since it's not a derive-able trait
+#[derive(Debug, Clone)]
+pub struct DatabaseError(pub String);
+
+impl std::fmt::Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for DatabaseError {}
+
+// Implement DBErrorMarker - this is the key trait that REVM requires
+impl revm_database::DBErrorMarker for DatabaseError {}
+
+impl From<String> for DatabaseError {
+    fn from(s: String) -> Self {
+        DatabaseError(s)
+    }
+}
+
+impl From<AppError> for DatabaseError {
+    fn from(e: AppError) -> Self {
+        DatabaseError(e.to_string())
+    }
+}
